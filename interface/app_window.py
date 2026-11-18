@@ -109,6 +109,10 @@ class TerminalTIApp:
     COR_VERMELHO = "#f85149"
 
     def __init__(self, master=None, ip_inicial: str = "192.168.14.134"):
+        if isinstance(master, str):
+            ip_inicial = master
+            master = None
+
         if master is None:
             self.root = tk.Tk()
             self.is_standalone = True
@@ -147,7 +151,7 @@ class TerminalTIApp:
             "TI.TNotebook.Tab",
             background=self.COR_PAINEL_2,
             foreground=self.COR_TEXTO_SEC,
-            padding=[14, 8],
+            padding=[10, 6],
             font=("Segoe UI", 9, "bold"),
         )
         style.map(
@@ -308,24 +312,38 @@ class TerminalTIApp:
 
         btn_ews = ttk.Button(
             topo,
-            text="🌐 Abrir EWS no Navegador",
+            text="🌐 Abrir EWS",
             command=lambda: webbrowser.open(f"http://{self._ip()}"),
             style="TI.Secondary.TButton",
         )
-        btn_ews.grid(row=0, column=7, sticky="e")
+        btn_ews.grid(row=0, column=7, sticky="e", padx=(0, 6))
         ToolTip(btn_ews, "Abre a página web original da impressora no navegador padrão.")
 
+        self.console_visivel = True
+        self.btn_toggle_console = ttk.Button(
+            topo,
+            text="◀ Ocultar Console",
+            command=self._toggle_console,
+            style="TI.Secondary.TButton",
+        )
+        self.btn_toggle_console.grid(row=0, column=8, sticky="e")
+        ToolTip(self.btn_toggle_console, "Oculta ou exibe o console lateral de logs para dar largura total aos cartões de configuração.")
+
         # ----------------------------------------------------
-        # ÁREA CENTRAL: ABAS (ESQUERDA) + CONSOLE (DIREITA)
+        # ÁREA CENTRAL: PANEDWINDOW (ABAS ESQUERDA + CONSOLE DIREITA)
         # ----------------------------------------------------
         corpo = tk.Frame(self.root, background=self.COR_FUNDO)
         corpo.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        corpo.columnconfigure(0, weight=62)
-        corpo.columnconfigure(1, weight=38)
+        corpo.columnconfigure(0, weight=1)
         corpo.rowconfigure(0, weight=1)
 
-        self.notebook = ttk.Notebook(corpo, style="TI.TNotebook")
-        self.notebook.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.paned = ttk.PanedWindow(corpo, orient="horizontal")
+        self.paned.grid(row=0, column=0, sticky="nsew")
+
+        # Container esquerdo para as abas
+        self.frame_abas = tk.Frame(self.paned, background=self.COR_FUNDO)
+        self.notebook = ttk.Notebook(self.frame_abas, style="TI.TNotebook")
+        self.notebook.pack(fill="both", expand=True)
 
         self._construir_aba_papel()
         self._construir_aba_tela_inicial()
@@ -333,27 +351,27 @@ class TerminalTIApp:
         self._construir_aba_motor_qualidade()
         self._construir_aba_rede_snmp()
         self._construir_aba_arquivos_dicionario()
+        self._construir_aba_terminal_ews_raw()
 
         # ----------------------------------------------------
         # CONSOLE EM TEMPO REAL COM EXPORTAÇÃO DE LOGS
         # ----------------------------------------------------
-        console_card = tk.Frame(
-            corpo,
+        self.console_card = tk.Frame(
+            self.paned,
             background=self.COR_PAINEL,
             highlightbackground=self.COR_BORDA,
             highlightthickness=1,
         )
-        console_card.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
-        console_card.columnconfigure(0, weight=1)
-        console_card.rowconfigure(1, weight=1)
+        self.console_card.columnconfigure(0, weight=1)
+        self.console_card.rowconfigure(1, weight=1)
 
-        barra_console = tk.Frame(console_card, background=self.COR_PAINEL, padx=12, pady=8)
+        barra_console = tk.Frame(self.console_card, background=self.COR_PAINEL, padx=12, pady=8)
         barra_console.grid(row=0, column=0, sticky="ew")
         barra_console.columnconfigure(0, weight=1)
 
         tk.Label(
             barra_console,
-            text="🖥️ CONSOLE DE ENGENHARIA & LOGS EM TEMPO REAL",
+            text="🖥️ Console de Logs",
             background=self.COR_PAINEL,
             foreground=self.COR_TEXTO,
             font=("Segoe UI", 9, "bold"),
@@ -361,11 +379,12 @@ class TerminalTIApp:
 
         btn_exportar = ttk.Button(
             barra_console,
-            text="💾 Exportar Log",
+            text="💾 Salvar",
             command=self._exportar_log,
             style="TI.Secondary.TButton",
+            width=8,
         )
-        btn_exportar.grid(row=0, column=1, padx=(0, 6))
+        btn_exportar.grid(row=0, column=1, padx=(0, 4))
         ToolTip(btn_exportar, "Salva todo o histórico do console em um arquivo .txt para auditoria.")
 
         btn_limpar = ttk.Button(
@@ -373,11 +392,12 @@ class TerminalTIApp:
             text="🧹 Limpar",
             command=lambda: self.txt_console.delete("1.0", "end"),
             style="TI.Secondary.TButton",
+            width=8,
         )
         btn_limpar.grid(row=0, column=2)
 
         self.txt_console = scrolledtext.ScrolledText(
-            console_card,
+            self.console_card,
             wrap="word",
             font=("Consolas", 9),
             background="#090c10",
@@ -391,6 +411,9 @@ class TerminalTIApp:
         )
         self.txt_console.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
+        self.paned.add(self.frame_abas, weight=7)
+        self.paned.add(self.console_card, weight=3)
+
         self._log("============================================================")
         self._log(" TERMINAL TI — CENTRAL DE ENGENHARIA LEXMARK INICIADA")
         self._log(" Motores ativos: EWS HTTP/CGI + PJL RAW 9100 + SNMPv2c Nativo")
@@ -401,6 +424,16 @@ class TerminalTIApp:
     # ========================================================
     # UTILITÁRIOS DE UI E LOG
     # ========================================================
+
+    def _toggle_console(self):
+        if self.console_visivel:
+            self.paned.forget(self.console_card)
+            self.console_visivel = False
+            self.btn_toggle_console.config(text="▶ Exibir Console")
+        else:
+            self.paned.add(self.console_card, weight=3)
+            self.console_visivel = True
+            self.btn_toggle_console.config(text="◀ Ocultar Console")
 
     def _ip(self) -> str:
         return self.entry_ip.get().strip()
@@ -451,9 +484,18 @@ class TerminalTIApp:
         def _on_canvas_configure(event):
             canvas.itemconfigure(win_id, width=event.width)
 
+        def _on_mousewheel(event):
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+
         content.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
@@ -505,7 +547,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_papel(self):
-        aba = self._criar_aba_rolavel(" 📄 Papel & Bandejas ")
+        aba = self._criar_aba_rolavel(" 📄 Papel ")
 
         # Card 1: Bandeja 1, Alimentador Manual e Origem Padrão (EWS HTTP POST + PJL)
         c_band = self._card(
@@ -673,7 +715,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_tela_inicial(self):
-        aba = self._criar_aba_rolavel(" 🎨 Tela Inicial & eSF ")
+        aba = self._criar_aba_rolavel(" 🎨 Tela Inicial ")
 
         # Card 1: Ícones e Grade da Tela Inicial (Organização Estilo Celular)
         c_ico = self._card(
@@ -1150,7 +1192,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_sistema_painel(self):
-        aba = self._criar_aba_rolavel(" 🖥️ Sistema, Painel & Relógio ")
+        aba = self._criar_aba_rolavel(" 🖥️ Sistema ")
 
         # Card 1: Mensagens no Visor LCD
         c_msg = self._card(
@@ -1409,7 +1451,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_motor_qualidade(self):
-        aba = self._criar_aba_rolavel(" ⚙️ Motor, Qualidade & Energia ")
+        aba = self._criar_aba_rolavel(" ⚙️ Qualidade ")
 
         # Card 1: Qualidade e Densidade do Toner
         c_qual = self._card(
@@ -1568,7 +1610,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_rede_snmp(self):
-        aba = self._criar_aba_rolavel(" 🌐 Rede, SMTP & SNMP ")
+        aba = self._criar_aba_rolavel(" 🌐 Rede & SNMP ")
 
         # Card 1: Identidade do Equipamento (Hostname, Contato, Local, Ativo)
         c_id = self._card(
@@ -1772,7 +1814,7 @@ class TerminalTIApp:
     # ========================================================
 
     def _construir_aba_arquivos_dicionario(self):
-        aba = self._criar_aba_rolavel(" 📦 Firmware & Dicionário PJL/SNMP ")
+        aba = self._criar_aba_rolavel(" 💾 Firmware & PJL ")
 
         # Card 1: Envio de Firmware (.fls / .bin) e Macros
         c_fw = self._card(
@@ -2038,3 +2080,352 @@ class TerminalTIApp:
             return f"{ok_count}/{len(paginas)} páginas de configuração EWS lidas e sincronizadas na interface."
 
         self._executar_async("Sincronizar Configurações Atuais da Máquina", _ler)
+
+    # ========================================================
+    # ABA 7: TERMINAL EWS, INSPETOR DE NVRAM & RAW DIRECT
+    # ========================================================
+
+    def _construir_aba_terminal_ews_raw(self):
+        aba = self._criar_aba_rolavel(" ⚡ Terminal EWS & RAW ")
+
+        # ----------------------------------------------------
+        # CARD 1: INSPETOR E MODIFICADOR DE FORMULÁRIOS EWS (NVRAM)
+        # ----------------------------------------------------
+        c_ews = self._card(
+            aba,
+            "Inspetor e Modificador Direto de Formulários EWS (NVRAM Lexmark)",
+            "Lê qualquer formulário web da impressora, lista todas as variáveis internas e permite alterar e gravar qualquer valor.",
+        )
+        c_ews.columnconfigure(1, weight=1)
+
+        tk.Label(c_ews, text="Menu / Endpoint EWS:", bg=self.COR_PAINEL, fg=self.COR_TEXTO, font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+
+        LISTA_ENDPOINTS_EWS = [
+            ("Menu Papel (Tamanhos/Tipos)", "/cgi-bin/dynamic/printer/config/gen/papermenu.html"),
+            ("Configurações Gerais", "/cgi-bin/dynamic/printer/config/gen/generalmenu.html"),
+            ("Tela Inicial / Botões Visor", "/cgi-bin/dynamic/printer/config/gen/sub/add_btns.html"),
+            ("Economia, Sleep e Hibernação", "/cgi-bin/dynamic/printer/config/gen/sub/timeouts.html"),
+            ("Rede TCP/IP e DNS", "/cgi-bin/dynamic/printer/config/net/tcpip.html"),
+            ("Servidor Web e Portas TCP", "/cgi-bin/dynamic/printer/config/net/tcpports.html"),
+            ("SNMP e Comunidades", "/cgi-bin/dynamic/printer/config/net/snmp.html"),
+            ("E-mail e Alertas SMTP", "/cgi-bin/dynamic/printer/config/net/email.html"),
+            ("Configurações de Cópia", "/cgi-bin/dynamic/printer/config/gen/copymenu.html"),
+            ("Configurações de Scanner", "/cgi-bin/dynamic/printer/config/gen/scanmenu.html"),
+            ("Configurações de Fax", "/cgi-bin/dynamic/printer/config/gen/faxmenu.html"),
+            ("Segurança e Autenticação", "/cgi-bin/dynamic/printer/config/sec/secmenu.html"),
+            ("Menu de Engenharia SE", "/cgi-bin/dynamic/printer/config/se/semenu.html"),
+            ("Informações do Dispositivo", "/cgi-bin/dynamic/printer/config/reports/deviceinfo.html"),
+            ("Configuração de Fábrica / Reset", "/cgi-bin/dynamic/printer/config/gen/reset.html"),
+        ]
+
+        self.cb_endpoint_ews = ttk.Combobox(
+            c_ews,
+            values=[f"{nome} — {url}" for nome, url in LISTA_ENDPOINTS_EWS] + ["[Personalizado / Digite a URL abaixo]"],
+            state="readonly",
+            style="TI.TCombobox",
+        )
+        self.cb_endpoint_ews.set(f"{LISTA_ENDPOINTS_EWS[0][0]} — {LISTA_ENDPOINTS_EWS[0][1]}")
+        self.cb_endpoint_ews.grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=4)
+
+        self.entry_url_ews = tk.Entry(
+            c_ews,
+            font=("Consolas", 10),
+            bg=self.COR_PAINEL_2,
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
+        )
+        self.entry_url_ews.insert(0, LISTA_ENDPOINTS_EWS[0][1])
+        self.entry_url_ews.grid(row=2, column=1, sticky="ew", padx=(6, 10), pady=4)
+
+        def _ao_selecionar_endpoint(event=None):
+            sel = self.cb_endpoint_ews.get()
+            for nome, url in LISTA_ENDPOINTS_EWS:
+                if url in sel:
+                    self.entry_url_ews.delete(0, "end")
+                    self.entry_url_ews.insert(0, url)
+                    return
+
+        self.cb_endpoint_ews.bind("<<ComboboxSelected>>", _ao_selecionar_endpoint)
+
+        btn_ler_ews = ttk.Button(
+            c_ews,
+            text="🔍 Inspecionar Formulário e Variáveis da NVRAM",
+            command=self._inspecionar_formulario_ews,
+            style="TI.Primary.TButton",
+        )
+        btn_ler_ews.grid(row=2, column=0, sticky="w", pady=4)
+
+        tree_frame = tk.Frame(c_ews, bg=self.COR_PAINEL)
+        tree_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(8, 4))
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+
+        cols = ("nvram_id", "valor_atual", "tipo")
+        self.tree_vars_ews = ttk.Treeview(tree_frame, columns=cols, show="headings", height=8, selectmode="browse")
+        self.tree_vars_ews.heading("nvram_id", text="Nome da Variável / NVRAM ID")
+        self.tree_vars_ews.heading("valor_atual", text="Valor Atual Gravado")
+        self.tree_vars_ews.heading("tipo", text="Tipo / Controle")
+        self.tree_vars_ews.column("nvram_id", width=260, anchor="w")
+        self.tree_vars_ews.column("valor_atual", width=220, anchor="w")
+        self.tree_vars_ews.column("tipo", width=140, anchor="center")
+
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_vars_ews.yview)
+        self.tree_vars_ews.configure(yscrollcommand=tree_scroll.set)
+        self.tree_vars_ews.grid(row=0, column=0, sticky="nsew")
+        tree_scroll.grid(row=0, column=1, sticky="ns")
+
+        edit_frame = tk.Frame(c_ews, bg=self.COR_PAINEL, pady=6)
+        edit_frame.grid(row=4, column=0, columnspan=2, sticky="ew")
+        edit_frame.columnconfigure(1, weight=1)
+        edit_frame.columnconfigure(3, weight=1)
+
+        tk.Label(edit_frame, text="Variável:", bg=self.COR_PAINEL, fg=self.COR_TEXTO_SEC, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.entry_edit_var_id = tk.Entry(edit_frame, font=("Consolas", 10), width=24, bg=self.COR_PAINEL_2, fg="#58a6ff", relief="flat")
+        self.entry_edit_var_id.grid(row=0, column=1, sticky="ew", padx=(0, 14))
+
+        tk.Label(edit_frame, text="Novo Valor:", bg=self.COR_PAINEL, fg=self.COR_TEXTO_SEC, font=("Segoe UI", 9, "bold")).grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.entry_edit_var_val = tk.Entry(edit_frame, font=("Consolas", 10), width=24, bg=self.COR_PAINEL_2, fg="#3fb950", relief="flat")
+        self.entry_edit_var_val.grid(row=0, column=3, sticky="ew", padx=(0, 14))
+
+        def _ao_clicar_item_tree(event=None):
+            sel = self.tree_vars_ews.selection()
+            if sel:
+                vals = self.tree_vars_ews.item(sel[0], "values")
+                if vals:
+                    self.entry_edit_var_id.delete(0, "end")
+                    self.entry_edit_var_id.insert(0, vals[0])
+                    self.entry_edit_var_val.delete(0, "end")
+                    self.entry_edit_var_val.insert(0, vals[1])
+
+        self.tree_vars_ews.bind("<<TreeviewSelect>>", _ao_clicar_item_tree)
+
+        btn_gravar_var = ttk.Button(
+            edit_frame,
+            text="⚡ Gravar Esta Variável na NVRAM",
+            command=self._gravar_variavel_ews_individual,
+            style="TI.Primary.TButton",
+        )
+        btn_gravar_var.grid(row=0, column=4, sticky="e")
+
+        # ----------------------------------------------------
+        # CARD 2: TERMINAL PJL RAW 9100 INTERATIVO
+        # ----------------------------------------------------
+        c_pjl = self._card(
+            aba,
+            "Terminal Interativo de Comandos PJL (Porta RAW 9100)",
+            "Injeção direta de comandos @PJL no interpretador da controladora de impressão.",
+        )
+        c_pjl.columnconfigure(1, weight=1)
+
+        quick_frame = tk.Frame(c_pjl, bg=self.COR_PAINEL)
+        quick_frame.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
+        comandos_rapidos = [
+            ("INFO ID", "INFO ID"),
+            ("INFO STATUS", "INFO STATUS"),
+            ("INFO CONFIG", "INFO CONFIG"),
+            ("INFO MEMORY", "INFO MEMORY"),
+            ("INFO VARIABLES", "INFO VARIABLES"),
+            ("PAGECOUNT", "INFO PAGECOUNT"),
+            ("MENSAGEM LCD", 'RDYMSG DISPLAY="SUPORTE TI"'),
+            ("LIMPAR LCD", 'RDYMSG DISPLAY=""'),
+        ]
+
+        def _definir_pjl_rapido(cmd):
+            self.entry_pjl_cmd.delete(0, "end")
+            self.entry_pjl_cmd.insert(0, cmd)
+            self._enviar_comando_pjl_terminal()
+
+        for idx, (label_btn, cmd_txt) in enumerate(comandos_rapidos):
+            b = ttk.Button(
+                quick_frame,
+                text=label_btn,
+                command=lambda c=cmd_txt: _definir_pjl_rapido(c),
+                style="TI.Secondary.TButton",
+            )
+            b.pack(side="left", padx=(0, 5))
+
+        tk.Label(c_pjl, text="Comando PJL:", bg=self.COR_PAINEL, fg=self.COR_TEXTO, font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w", pady=4)
+        self.entry_pjl_cmd = tk.Entry(
+            c_pjl,
+            font=("Consolas", 11, "bold"),
+            bg=self.COR_PAINEL_2,
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
+        )
+        self.entry_pjl_cmd.insert(0, "INFO STATUS")
+        self.entry_pjl_cmd.grid(row=2, column=1, sticky="ew", padx=(6, 10), pady=4)
+        self.entry_pjl_cmd.bind("<Return>", lambda e: self._enviar_comando_pjl_terminal())
+
+        btn_enviar_pjl = ttk.Button(
+            c_pjl,
+            text="⚡ Enviar PJL na Porta 9100",
+            command=self._enviar_comando_pjl_terminal,
+            style="TI.Primary.TButton",
+        )
+        btn_enviar_pjl.grid(row=2, column=2, sticky="e", pady=4)
+
+        self.txt_pjl_resposta = scrolledtext.ScrolledText(
+            c_pjl,
+            wrap="word",
+            font=("Consolas", 9),
+            height=6,
+            background="#090c10",
+            foreground="#3fb950",
+            relief="flat",
+        )
+        self.txt_pjl_resposta.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
+
+        # ----------------------------------------------------
+        # CARD 3: AUDITORIA E CONSULTA DIRETA SNMPv2c
+        # ----------------------------------------------------
+        c_snmp = self._card(
+            aba,
+            "Auditoria e Consulta Direta SNMPv2c (Porta UDP 161)",
+            "Consulta e gravação de MIBs públicas e proprietárias Lexmark via protocolo puro UDP.",
+        )
+        c_snmp.columnconfigure(1, weight=1)
+
+        tk.Label(c_snmp, text="OID:", bg=self.COR_PAINEL, fg=self.COR_TEXTO, font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+        self.entry_snmp_oid = ttk.Combobox(
+            c_snmp,
+            values=[
+                "1.3.6.1.2.1.1.1.0 (sysDescr)",
+                "1.3.6.1.2.1.1.5.0 (sysName)",
+                "1.3.6.1.2.1.1.6.0 (sysLocation)",
+                "1.3.6.1.2.1.1.4.0 (sysContact)",
+                "1.3.6.1.2.1.1.3.0 (sysUpTime)",
+                "1.3.6.1.2.1.43.5.1.1.17.1 (prtGeneralSerialNumber)",
+                "1.3.6.1.2.1.43.10.2.1.4.1.1 (prtMarkerLifeCount)",
+                "1.3.6.1.2.1.43.16.5.1.2.1.1 (prtConsoleDisplayBufferText)",
+            ],
+            style="TI.TCombobox",
+            font=("Consolas", 10),
+        )
+        self.entry_snmp_oid.set("1.3.6.1.2.1.1.1.0 (sysDescr)")
+        self.entry_snmp_oid.grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=4)
+
+        botoes_snmp = tk.Frame(c_snmp, bg=self.COR_PAINEL)
+        botoes_snmp.grid(row=1, column=2, sticky="e")
+
+        btn_snmp_get = ttk.Button(
+            botoes_snmp,
+            text="🔍 SNMP GET",
+            command=self._consultar_snmp_terminal,
+            style="TI.Primary.TButton",
+        )
+        btn_snmp_get.pack(side="left", padx=(0, 5))
+
+        btn_snmp_scanner = ttk.Button(
+            botoes_snmp,
+            text="📡 Scan de Portas",
+            command=self._escanear_portas_terminal,
+            style="TI.Secondary.TButton",
+        )
+        btn_snmp_scanner.pack(side="left")
+
+        self.lbl_snmp_resultado = tk.Label(
+            c_snmp,
+            text="Resultado SNMP: Aguardando consulta...",
+            bg=self.COR_PAINEL_2,
+            fg=self.COR_TEXTO,
+            font=("Consolas", 9),
+            anchor="w",
+            padx=10,
+            pady=8,
+            relief="solid",
+            bd=1,
+        )
+        self.lbl_snmp_resultado.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+    # ========================================================
+    # HANDLERS DO TERMINAL EWS, PJL E SNMP
+    # ========================================================
+
+    def _inspecionar_formulario_ews(self):
+        url = self.entry_url_ews.get().strip()
+        if not url:
+            messagebox.showwarning("Terminal EWS", "Informe a URL ou selecione um endpoint.", parent=self.root)
+            return
+
+        def _tarefa():
+            action, method, pares, mapa = self._ews().ler_formulario(url)
+            def _aplicar():
+                for item in self.tree_vars_ews.get_children():
+                    self.tree_vars_ews.delete(item)
+                for k, v in pares:
+                    self.tree_vars_ews.insert("", "end", values=(k, v, "Input / Select"))
+            self.root.after(0, _aplicar)
+            return f"Formulário '{url}' lido com sucesso: {len(pares)} variáveis encontradas (Action: {action})."
+
+        self._executar_async("Inspecionar Formulário EWS", _tarefa)
+
+    def _gravar_variavel_ews_individual(self):
+        url = self.entry_url_ews.get().strip()
+        var_id = self.entry_edit_var_id.get().strip()
+        var_val = self.entry_edit_var_val.get().strip()
+
+        if not var_id:
+            messagebox.showwarning("Gravar NVRAM", "Selecione uma variável na tabela ou digite o ID.", parent=self.root)
+            return
+
+        def _tarefa():
+            res = self._ews().gravar_campos_formulario(url, {var_id: var_val})
+            def _atualizar_tree():
+                for item in self.tree_vars_ews.get_children():
+                    vals = self.tree_vars_ews.item(item, "values")
+                    if vals and vals[0] == var_id:
+                        self.tree_vars_ews.item(item, values=(vals[0], var_val, vals[2]))
+                        break
+            self.root.after(0, _atualizar_tree)
+            return f"Variável '{var_id}' alterada para '{var_val}' na NVRAM da impressora (HTTP {res.get('status_code', 200)})."
+
+        self._executar_async(f"Gravar {var_id} = {var_val}", _tarefa)
+
+    def _enviar_comando_pjl_terminal(self):
+        cmd = self.entry_pjl_cmd.get().strip()
+        if not cmd:
+            return
+
+        def _tarefa():
+            resposta = enviar_pjl(self._ip(), [cmd], aguardar_resposta=True, timeout=5.0)
+            def _atualizar():
+                self.txt_pjl_resposta.delete("1.0", "end")
+                self.txt_pjl_resposta.insert("end", resposta.strip() if resposta.strip() else "[Comando PJL enviado sem retorno textual do motor]")
+            self.root.after(0, _atualizar)
+            return f"PJL '{cmd}' enviado com sucesso."
+
+        self._executar_async(f"Enviar PJL {cmd[:25]}", _tarefa)
+
+    def _consultar_snmp_terminal(self):
+        oid_raw = self.entry_snmp_oid.get().strip()
+        bare_oid = oid_raw.split()[0].strip()
+        comunidade = self.combo_community.get().strip() or "public"
+
+        def _tarefa():
+            val = snmp_get(self._ip(), bare_oid, comunidade=comunidade, timeout=3.5)
+            def _atualizar():
+                self.lbl_snmp_resultado.config(text=f"SNMP [{bare_oid}] = {val}", fg="#3fb950")
+            self.root.after(0, _atualizar)
+            return f"SNMP GET {bare_oid} = {val}"
+
+        self._executar_async(f"SNMP GET {bare_oid}", _tarefa)
+
+    def _escanear_portas_terminal(self):
+        def _tarefa():
+            portas = escanear_portas_impressora(self._ip())
+            def _atualizar():
+                res_txt = " | ".join(f"{p}: {st.split()[0]}" for p, st in portas.items())
+                self.lbl_snmp_resultado.config(text=f"Portas ({self._ip()}): {res_txt}", fg="#58a6ff")
+                for p, st in portas.items():
+                    self._log(f"  • {p}: {st}")
+            self.root.after(0, _atualizar)
+            return f"{len(portas)} portas analisadas na impressora."
+
+        self._executar_async("Scanner de Portas de Impressão", _tarefa)
