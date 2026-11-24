@@ -177,6 +177,12 @@ IDIOMA_OPCOES = {
     "Italiano": "5",
 }
 
+MODO_SCANNER_OPCOES = {
+    "Ativado (Scanner + ADF Normais)": "0",
+    "Desativado (Modo Só Impressora — Ignora Scanner)": "1",
+    "ADF Desativado (Somente Mesa Plana Ativa)": "2",
+}
+
 # ------------------------------------------------------------
 # 5. DICIONÁRIO CATEGORIZADO DE COMANDOS PJL E SNMP
 # ------------------------------------------------------------

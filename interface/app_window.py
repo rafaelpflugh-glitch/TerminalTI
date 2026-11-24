@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import webbrowser
 
+from core.agent import TerminalTIAgent, carregar_config_agente, salvar_config_agente
 from core.catalog import (
     CONFIG_MF_OPCOES,
     DICIONARIO_COMANDOS,
@@ -23,6 +24,7 @@ from core.catalog import (
     MIDIAS_PESO_CAMPOS,
     MIDIAS_TEXTURA_CAMPOS,
     MODO_ECO_OPCOES,
+    MODO_SCANNER_OPCOES,
     ORIGEM_PADRAO_OPCOES,
     PESO_OPCOES,
     RECUPERACAO_ATOLAMENTO_OPCOES,
@@ -43,6 +45,7 @@ from core.pjl_snmp_client import (
     snmp_get,
     snmp_set,
 )
+from core.safe_tools import definir_modo_scanner, imprimir_relatorio_bancada, ler_modo_scanner
 
 
 def _chave_por_valor(mapa: dict, valor: str, padrao: str = "") -> str:
@@ -352,6 +355,7 @@ class TerminalTIApp:
         self._construir_aba_rede_snmp()
         self._construir_aba_arquivos_dicionario()
         self._construir_aba_terminal_ews_raw()
+        self._construir_aba_agente()
 
         # ----------------------------------------------------
         # CONSOLE EM TEMPO REAL COM EXPORTAÇÃO DE LOGS
@@ -1314,6 +1318,51 @@ class TerminalTIApp:
             style="TI.Secondary.TButton",
         ).grid(row=3, column=2, columnspan=2, sticky="ew", pady=(8, 0))
 
+        # Card 2B: Controle Validado do Modo do Scanner (MFP via UCF)
+        c_scanner = self._card(
+            aba,
+            "🔬 Modo de Operação do Scanner MFP (Validado — mfp.scanner.scannerDisabled)",
+            "Permite alternar multifuncionais Lexmark entre Ativado, Desativado (modo só impressora — bypass de erro 840.xx) ou ADF Desativado (só mesa plana) via mini-UCF seguro. Requer reinicialização da máquina para o ScanManager2 aplicar.",
+        )
+        c_scanner.columnconfigure(1, weight=1)
+
+        tk.Label(c_scanner, text="Modo do Scanner:", bg=self.COR_PAINEL, fg=self.COR_TEXTO).grid(row=1, column=0, sticky="w", pady=4)
+        self.cb_modo_scanner = ttk.Combobox(
+            c_scanner,
+            values=list(MODO_SCANNER_OPCOES.keys()),
+            state="readonly",
+            style="TI.TCombobox",
+        )
+        self.cb_modo_scanner.set(list(MODO_SCANNER_OPCOES.keys())[0])
+        self.cb_modo_scanner.grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=4)
+
+        def _ler_modo_scanner_ui():
+            res = ler_modo_scanner(self._ip())
+            cod = res.get("codigo")
+            if cod is not None:
+                chave_ui = _chave_por_valor(MODO_SCANNER_OPCOES, cod)
+                self.root.after(0, lambda k=chave_ui: self.cb_modo_scanner.set(k))
+            return res["resumo"]
+
+        def _gravar_modo_scanner_ui():
+            cod = MODO_SCANNER_OPCOES[self.cb_modo_scanner.get()]
+            res = definir_modo_scanner(self._ip(), cod)
+            return res["resumo"]
+
+        ttk.Button(
+            c_scanner,
+            text="🔍 Ler Modo Atual",
+            command=lambda: self._executar_async("Ler Modo do Scanner (UCF/ScanMgr)", _ler_modo_scanner_ui),
+            style="TI.Secondary.TButton",
+        ).grid(row=1, column=2, padx=(0, 6), pady=4)
+
+        ttk.Button(
+            c_scanner,
+            text="⚡ GRAVAR MODO DO SCANNER",
+            command=lambda: self._executar_async("Gravar Modo do Scanner (UCF Seguro)", _gravar_modo_scanner_ui),
+            style="TI.Primary.TButton",
+        ).grid(row=1, column=3, pady=4)
+
         # Card 3: Sincronização de Data e Hora
         c_relogio = self._card(
             aba,
@@ -2102,20 +2151,21 @@ class TerminalTIApp:
 
         LISTA_ENDPOINTS_EWS = [
             ("Menu Papel (Tamanhos/Tipos)", "/cgi-bin/dynamic/printer/config/gen/papermenu.html"),
-            ("Configurações Gerais", "/cgi-bin/dynamic/printer/config/gen/generalmenu.html"),
+            ("Configurações Gerais (Validado)", "/cgi-bin/dynamic/printer/config/gen/general.html"),
             ("Tela Inicial / Botões Visor", "/cgi-bin/dynamic/printer/config/gen/sub/add_btns.html"),
-            ("Economia, Sleep e Hibernação", "/cgi-bin/dynamic/printer/config/gen/sub/timeouts.html"),
-            ("Rede TCP/IP e DNS", "/cgi-bin/dynamic/printer/config/net/tcpip.html"),
-            ("Servidor Web e Portas TCP", "/cgi-bin/dynamic/printer/config/net/tcpports.html"),
-            ("SNMP e Comunidades", "/cgi-bin/dynamic/printer/config/net/snmp.html"),
-            ("E-mail e Alertas SMTP", "/cgi-bin/dynamic/printer/config/net/email.html"),
-            ("Configurações de Cópia", "/cgi-bin/dynamic/printer/config/gen/copymenu.html"),
-            ("Configurações de Scanner", "/cgi-bin/dynamic/printer/config/gen/scanmenu.html"),
-            ("Configurações de Fax", "/cgi-bin/dynamic/printer/config/gen/faxmenu.html"),
-            ("Segurança e Autenticação", "/cgi-bin/dynamic/printer/config/sec/secmenu.html"),
-            ("Menu de Engenharia SE", "/cgi-bin/dynamic/printer/config/se/semenu.html"),
+            ("Economia, Sleep e Timeouts", "/cgi-bin/dynamic/printer/config/gen/setupgen_timeouts.html"),
+            ("Rede / Portas (Menu Principal)", "/cgi-bin/dynamic/config/net/network.html"),
+            ("SNMP e Comunidades", "/cgi-bin/dynamic/config/net/snmp.html"),
+            ("E-mail / FTP / Scan to Net", "/cgi-bin/dynamic/printer/config/gen/scan2net.html"),
+            ("Configurações de Cópia", "/cgi-bin/dynamic/printer/config/gen/copy.html"),
+            ("Configurações de Fax", "/cgi-bin/dynamic/printer/config/gen/faxmode.html"),
+            ("Segurança e Autenticação", "/cgi-bin/dynamic/config/secure/security.html"),
+            ("Menu de Engenharia SE (Validado)", "/cgi-bin/dynamic/se_index.html"),
+            ("SE — ScanManager2 Debug (Scanner)", "/cgi-bin/script/printer/scanmgr"),
+            ("SE — Tabela de Alertas NPAP", "/cgi-bin/npapalertpg"),
+            ("Importar / Exportar UCF", "/cgi-bin/dynamic/printer/config/gen/importexport.html"),
             ("Informações do Dispositivo", "/cgi-bin/dynamic/printer/config/reports/deviceinfo.html"),
-            ("Configuração de Fábrica / Reset", "/cgi-bin/dynamic/printer/config/gen/reset.html"),
+            ("Restaurar Padrões de Fábrica", "/cgi-bin/dynamic/printer/config/secure/printer_reset_options.html"),
         ]
 
         self.cb_endpoint_ews = ttk.Combobox(
@@ -2429,3 +2479,279 @@ class TerminalTIApp:
             return f"{len(portas)} portas analisadas na impressora."
 
         self._executar_async("Scanner de Portas de Impressão", _tarefa)
+
+    # ========================================================
+    # ABA 8: AGENTE TI — COMANDOS EM LINGUAGEM NATURAL (ANTI-BRICK)
+    # ========================================================
+
+    def _construir_aba_agente(self):
+        self.agente_ti = TerminalTIAgent()
+        cfg = self.agente_ti.config
+
+        outer = ttk.Frame(self.notebook, style="TI.TFrame")
+        self.notebook.add(outer, text=" 🤖 Agente TI ")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=1)
+
+        # 1. Banner Superior: Blindagem Anti-Brick + Modo Offline / Gemini Cloud
+        topo_ag = tk.Frame(
+            outer,
+            background=self.COR_PAINEL,
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
+            padx=12,
+            pady=10,
+        )
+        topo_ag.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        topo_ag.columnconfigure(0, weight=1)
+
+        tk.Label(
+            topo_ag,
+            text="🛡️ BLINDAGEM ANTI-BRICK ATIVA — Whitelist Fechada (Firmware, Wipe, NVRAM, Factory Reset e IP Estático BLOQUEADOS)",
+            background=self.COR_PAINEL,
+            foreground=self.COR_VERDE,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
+        self.var_agente_llm = tk.BooleanVar(value=bool(cfg.get("usar_llm", False)))
+        chk_llm = tk.Checkbutton(
+            topo_ag,
+            text="☁️ Modo Híbrido: usar Gemini API na nuvem (0% CPU local) para perguntas livres",
+            variable=self.var_agente_llm,
+            command=self._alternar_modo_llm_agente,
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO,
+            selectcolor=self.COR_PAINEL_2,
+            activebackground=self.COR_PAINEL,
+            activeforeground=self.COR_TEXTO,
+            font=("Segoe UI", 9),
+        )
+        chk_llm.grid(row=1, column=0, sticky="w")
+
+        self.lbl_status_llm = tk.Label(
+            topo_ag,
+            text=self._texto_status_llm(),
+            background=self.COR_PAINEL,
+            foreground=self.COR_DESTAQUE,
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.lbl_status_llm.grid(row=1, column=1, padx=10, sticky="e")
+
+        ttk.Button(
+            topo_ag,
+            text="🔑 Configurar API Key",
+            command=self._abrir_config_api_agente,
+            style="TI.Secondary.TButton",
+        ).grid(row=1, column=2, sticky="e")
+
+        # 2. Barra de Atalhos Rápidos de 1 Clique
+        barra_chips = tk.Frame(outer, background=self.COR_FUNDO)
+        barra_chips.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+
+        atalhos = [
+            ("📊 Diagnóstico", "status completo"),
+            ("🔬 Modo Scanner", "ver modo do scanner"),
+            ("🎨 Ler Tela Inicial", "ver tela inicial"),
+            ("🖨️ Relatório Bancada (9100)", "imprimir relatorio de bancada"),
+            ("🔎 Varrer Rede Lexmark", "varrer rede"),
+            ("❓ Ajuda", "ajuda"),
+        ]
+        for rotulo, cmd_txt in atalhos:
+            ttk.Button(
+                barra_chips,
+                text=rotulo,
+                command=lambda c=cmd_txt: self._enviar_comando_agente(c),
+                style="TI.Secondary.TButton",
+            ).pack(side="left", padx=(0, 6), pady=2)
+
+        # 3. Área de Chat Dark Mode
+        chat_box = tk.Frame(
+            outer,
+            background=self.COR_PAINEL,
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
+            padx=8,
+            pady=8,
+        )
+        chat_box.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        chat_box.columnconfigure(0, weight=1)
+        chat_box.rowconfigure(0, weight=1)
+
+        self.txt_chat_agente = scrolledtext.ScrolledText(
+            chat_box,
+            wrap="word",
+            font=("Consolas", 10),
+            background="#0b0f14",
+            foreground=self.COR_TEXTO,
+            insertbackground="#ffffff",
+            relief="flat",
+            padx=10,
+            pady=10,
+        )
+        self.txt_chat_agente.grid(row=0, column=0, sticky="nsew")
+        self.txt_chat_agente.tag_config("user", foreground="#58a6ff", font=("Consolas", 10, "bold"))
+        self.txt_chat_agente.tag_config("meta", foreground="#8b949e", font=("Consolas", 8, "italic"))
+        self.txt_chat_agente.tag_config("ok", foreground="#e6edf3")
+        self.txt_chat_agente.tag_config("warn", foreground="#d29922")
+        self.txt_chat_agente.tag_config("err", foreground="#f85149")
+
+        self._escrever_chat_agente(
+            "meta",
+            "🤖 Agente TI pronto! Digite comandos em português abaixo ou clique em um atalho.\n"
+            "Exemplos: 'como está a 134?', 'ver modo do scanner', 'coloca \"EM TESTE\" no visor', "
+            "'ocultar fax', 'imprimir relatório de bancada', 'ajuda'.\n\n",
+        )
+        self.txt_chat_agente.configure(state="disabled")
+
+        # 4. Caixa de Entrada de Comandos
+        barra_input = tk.Frame(outer, background=self.COR_FUNDO)
+        barra_input.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        barra_input.columnconfigure(0, weight=1)
+
+        self.entry_agente_cmd = tk.Entry(
+            barra_input,
+            font=("Consolas", 11),
+            background=self.COR_PAINEL_2,
+            foreground="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
+        )
+        self.entry_agente_cmd.grid(row=0, column=0, sticky="ew", ipady=7, padx=(0, 8))
+        self.entry_agente_cmd.bind("<Return>", lambda _e: self._enviar_comando_agente())
+
+        self.btn_enviar_agente = ttk.Button(
+            barra_input,
+            text="▶ ENVIAR COMANDO",
+            command=self._enviar_comando_agente,
+            style="TI.Primary.TButton",
+        )
+        self.btn_enviar_agente.grid(row=0, column=1)
+
+    def _texto_status_llm(self) -> str:
+        cfg = self.agente_ti.recarregar_config()
+        tem_chave = bool(cfg.get("api_key"))
+        ativo = bool(cfg.get("usar_llm"))
+        if ativo and tem_chave:
+            return f"☁️ Gemini Ativo ({cfg.get('modelo_gemini', 'gemini-2.5-flash')})"
+        if ativo and not tem_chave:
+            return "⚠️ Sem API Key (rodando Offline)"
+        return "⚡ Motor Local Offline (0% CPU)"
+
+    def _alternar_modo_llm_agente(self):
+        cfg = self.agente_ti.recarregar_config()
+        salvar_config_agente(
+            api_key=cfg.get("api_key", ""),
+            usar_llm=self.var_agente_llm.get(),
+            modelo_gemini=cfg.get("modelo_gemini", "gemini-2.5-flash"),
+        )
+        self.lbl_status_llm.config(text=self._texto_status_llm())
+
+    def _abrir_config_api_agente(self):
+        cfg = self.agente_ti.recarregar_config()
+        win = tk.Toplevel(self.root)
+        win.title("Configurar Gemini API (Opcional — Nuvem)")
+        win.geometry("520x250")
+        win.configure(background=self.COR_FUNDO)
+        win.transient(self.root)
+        win.grab_set()
+
+        frame = tk.Frame(win, background=self.COR_PAINEL, padx=16, pady=14)
+        frame.pack(fill="both", expand=True, padx=12, pady=12)
+        frame.columnconfigure(0, weight=1)
+
+        tk.Label(
+            frame,
+            text="Chave API do Google AI Studio (opcional — processa na nuvem sem pesar no PC):",
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        ent_key = tk.Entry(
+            frame,
+            show="*",
+            font=("Consolas", 10),
+            bg=self.COR_PAINEL_2,
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+        )
+        ent_key.insert(0, cfg.get("api_key", ""))
+        ent_key.grid(row=1, column=0, sticky="ew", ipady=5, pady=(0, 10))
+
+        tk.Label(
+            frame,
+            text="Modelo Gemini (padrão rápido e gratuito no AI Studio):",
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO_SEC,
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).grid(row=2, column=0, sticky="w", pady=(0, 4))
+
+        ent_mod = tk.Entry(
+            frame,
+            font=("Consolas", 10),
+            bg=self.COR_PAINEL_2,
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+        )
+        ent_mod.insert(0, cfg.get("modelo_gemini", "gemini-2.5-flash"))
+        ent_mod.grid(row=3, column=0, sticky="ew", ipady=4, pady=(0, 14))
+
+        def _salvar():
+            chave = ent_key.get().strip()
+            modelo = ent_mod.get().strip() or "gemini-2.5-flash"
+            usar = True if chave else False
+            salvar_config_agente(chave, usar, modelo)
+            self.var_agente_llm.set(usar)
+            self.lbl_status_llm.config(text=self._texto_status_llm())
+            self._log("🔑 Configuração do Agente TI atualizada (salva localmente em config_agente.json).")
+            win.destroy()
+
+        ttk.Button(frame, text="💾 Salvar Configuração", command=_salvar, style="TI.Primary.TButton").grid(
+            row=4, column=0, sticky="e"
+        )
+
+    def _escrever_chat_agente(self, tag: str, texto: str):
+        self.txt_chat_agente.configure(state="normal")
+        self.txt_chat_agente.insert("end", texto, tag)
+        self.txt_chat_agente.see("end")
+        self.txt_chat_agente.configure(state="disabled")
+
+    def _enviar_comando_agente(self, comando_forcado: Optional[str] = None):
+        cmd = (comando_forcado if comando_forcado is not None else self.entry_agente_cmd.get()).strip()
+        if not cmd:
+            return
+        if comando_forcado is None:
+            self.entry_agente_cmd.delete(0, "end")
+
+        agora = datetime.now().strftime("%H:%M:%S")
+        ip_atual = self._ip()
+        comunidade = self.combo_community.get().strip() or "public"
+
+        self._escrever_chat_agente("user", f"[{agora}] Você ({ip_atual}) > {cmd}\n")
+        self._status(f"🤖 Agente executando: {cmd[:40]}...", self.COR_AMARELO)
+        self.btn_enviar_agente.configure(state="disabled")
+
+        def _worker():
+            resp = self.agente_ti.processar_comando(cmd, ip_padrao=ip_atual, community=comunidade)
+
+            def _concluir():
+                tag_cor = "ok" if resp.ok else ("warn" if resp.motor == "ANTI-BRICK" else "err")
+                self._escrever_chat_agente(
+                    "meta",
+                    f"   [{resp.motor} | ação: {resp.acao}]\n",
+                )
+                self._escrever_chat_agente(tag_cor, f"{resp.mensagem}\n\n")
+                self._log(f"🤖 Agente [{resp.motor}/{resp.acao}]: {'OK' if resp.ok else 'BLOQUEADO/ERRO'}")
+                self._status("● Pronto para operar", self.COR_VERDE if resp.ok else self.COR_AMARELO)
+                self.btn_enviar_agente.configure(state="normal")
+
+            self.root.after(0, _concluir)
+
+        threading.Thread(target=_worker, daemon=True).start()

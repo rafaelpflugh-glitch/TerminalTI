@@ -400,22 +400,24 @@ class LexmarkEWSClient:
         try:
             resp = self.session.post(
                 url_export,
-                data={"csrf_token": csrf_val} if csrf_val else {},
-                timeout=25,
+                data={"csrf_token": csrf_val},
+                timeout=30,
             )
             resp.raise_for_status()
             return resp.content
         except Exception as erro:
             raise EWSClientError(f"Não foi possível exportar {tipo}: {erro}") from erro
 
-    def importar_configuracao_ucf(self, caminho_ucf: str, endpoint: str = "importsettings.html") -> Dict[str, str]:
+    def importar_ucf_bytes(
+        self,
+        conteudo: bytes,
+        nome_arquivo: str = "patch.ucf",
+        endpoint: str = "importsettings.html",
+    ) -> Dict[str, str]:
         """
-        Importa um arquivo .ucf ou .xml de configuração/atalhos para a impressora.
+        Importa um conteúdo .ucf em memória (ex.: mini-UCF de 1 linha) para a impressora
+        via endpoint oficial /cgi-bin/dynamic/printer/config/secure/<endpoint>.
         """
-        arq = Path(caminho_ucf)
-        if not arq.is_file():
-            raise EWSClientError(f"Arquivo não encontrado: {arq}")
-
         url = self._url(f"/cgi-bin/dynamic/printer/config/secure/{endpoint}")
         csrf_val = ""
         try:
@@ -427,15 +429,44 @@ class LexmarkEWSClient:
             pass
 
         files = {
-            "input_file": (arq.name, arq.read_bytes(), "application/octet-stream"),
+            "input_file": (nome_arquivo, conteudo, "application/octet-stream"),
         }
         data = {"csrf_token": csrf_val}
         try:
             resp = self.session.post(url, files=files, data=data, timeout=60)
             resp.raise_for_status()
-            return {"url": url, "status_code": str(resp.status_code), "arquivo": arq.name}
+            texto_limpo = re.sub(r"<[^>]+>", " ", resp.text)
+            texto_limpo = re.sub(r"\s+", " ", texto_limpo).strip()
+            return {
+                "url": url,
+                "status_code": str(resp.status_code),
+                "arquivo": nome_arquivo,
+                "resposta": texto_limpo[:240],
+            }
         except Exception as erro:
-            raise EWSClientError(f"Falha ao importar arquivo {arq.name}: {erro}") from erro
+            raise EWSClientError(f"Falha ao importar {nome_arquivo}: {erro}") from erro
+
+    def ler_pagina_texto(self, caminho: str) -> str:
+        """
+        Realiza um HTTP GET somente-leitura em um endpoint EWS/SE (ex.: /cgi-bin/script/printer/scanmgr)
+        e retorna o conteúdo textual bruto.
+        """
+        url = self._url(caminho)
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.text
+        except Exception as erro:
+            raise EWSClientError(f"Falha ao ler {url}: {erro}") from erro
+
+    def importar_configuracao_ucf(self, caminho_ucf: str, endpoint: str = "importsettings.html") -> Dict[str, str]:
+        """
+        Importa um arquivo .ucf ou .xml de configuração/atalhos para a impressora.
+        """
+        arq = Path(caminho_ucf)
+        if not arq.is_file():
+            raise EWSClientError(f"Arquivo não encontrado: {arq}")
+        return self.importar_ucf_bytes(arq.read_bytes(), nome_arquivo=arq.name, endpoint=endpoint)
 
     def enviar_firmware_http(self, caminho_fls: str) -> Dict[str, str]:
         """
