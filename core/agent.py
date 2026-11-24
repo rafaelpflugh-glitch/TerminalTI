@@ -1,15 +1,24 @@
 """
 ============================================================
-TERMINAL TI — AGENTE HÍBRIDO BLINDADO (ANTI-BRICK)
+TERMINAL TI — AGENTE HÍBRIDO COM PROTEÇÃO EM 3 NÍVEIS
 (core/agent.py)
 ============================================================
 
-Arquitetura em 2 Motores:
-- Motor A (Offline Local, 0% CPU, <5ms): interpreta comandos em português
-  para operações de bancada diretamente via Whitelist fechada (safe_tools.py).
-- Motor B (Gemini API na Nuvem, Opcional): acionado apenas quando o técnico
-  configura uma chave API do Google AI Studio e faz perguntas complexas ou
-  diagnósticos abertos. Também restrito ESTRITAMENTE à mesma Whitelist Anti-Brick.
+Arquitetura de Segurança em 3 Camadas:
+- Nível 0/1 (Operação Segura / Whitelist): executa diretamente (diagnóstico,
+  visor LCD, tela inicial, modo scanner, relatório 9100, papel/eco/duplex, varredura).
+- Nível 2 (Operação Crítica Controlada): Restaurar Padrões de Fábrica, Apagar NVRAM,
+  Wipe Fora de Serviço, Mudar IP Estático e Atualizar Firmware (.fls).
+  NUNCA executa direto — realiza pré-checagem técnica (modelo SNMP, sub-rede/máscara,
+  integridade do .fls), alerta detalhadamente sobre as consequências e exige
+  CONFIRMAÇÃO HUMANA EXPLÍCITA com PIN de 4 dígitos (validade de 60 segundos).
+- Nível 3 (Hard-Lock Anti-Brick): comandos PJL crus de exclusão/escrita na flash
+  (FSDELETE / FSDOWNLOAD) continuam bloqueados permanentemente.
+
+Motores de Interpretação:
+- Motor A (Offline Local, 0% CPU, <5 ms): comandos diretos em português.
+- Motor B (Gemini API na Nuvem, Opcional): perguntas livres e raciocínio assistido,
+  sempre preso às mesmas travas (o LLM NUNCA pode confirmar uma ação crítica).
 """
 
 from __future__ import annotations
@@ -17,44 +26,62 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import random
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import unicodedata
 
 import requests
 
-from core.safe_tools import BOTOES_HOME_ALIASES, SAFE_TOOL_REGISTRY
+from core.safe_tools import (
+    BOTOES_HOME_ALIASES,
+    CRITICAL_TOOL_REGISTRY,
+    SAFE_TOOL_REGISTRY,
+    identificar_alvo_rapido,
+    validar_pre_voo_firmware,
+    validar_pre_voo_ip_estatico,
+)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT_DIR / "config_agente.json"
+EXPIRACAO_CONFIRMACAO_SEG = 60.0
 
-# Palavras-chave de zona proibida (Hard-Lock Anti-Brick)
-TERMOS_BLOQUEADOS_ANTI_BRICK = [
-    ("firmware", "Atualização de firmware (.fls/.bin) é bloqueada no Agente por segurança Anti-Brick."),
-    (".fls", "Envio de arquivo .fls é bloqueado no Agente por segurança Anti-Brick."),
-    (".bin", "Envio de binário de firmware é bloqueado no Agente por segurança Anti-Brick."),
-    ("nvram", "Apagar/manipular NVRAM diretamente é bloqueado no Agente por segurança Anti-Brick."),
-    ("wipe", "Limpeza de disco / Out-of-Service Wipe é bloqueada no Agente por segurança Anti-Brick."),
-    ("fora de servico", "Modo Fora de Serviço (Wipe) é bloqueado no Agente por segurança Anti-Brick."),
-    ("formatar disco", "Formatação de disco/flash é bloqueada no Agente por segurança Anti-Brick."),
-    ("padrao de fabrica", "Restauração de padrões de fábrica é bloqueada no Agente (risco de perda de rede/IP)."),
-    ("padroes de fabrica", "Restauração de padrões de fábrica é bloqueada no Agente (risco de perda de rede/IP)."),
-    ("factory reset", "Factory reset é bloqueado no Agente por segurança."),
-    ("reset de fabrica", "Reset de fábrica é bloqueado no Agente por segurança."),
-    ("ip estatico", "Alteração de IP estático é bloqueada no Agente para evitar perda de acesso à impressora."),
-    ("mudar ip", "Alteração de IP é bloqueada no Agente para evitar perda de acesso à impressora."),
-    ("fsdelete", "Comandos de escrita/exclusão no sistema de arquivos PJL são bloqueados (Anti-Brick)."),
-    ("fsdownload", "Comandos de escrita no sistema de arquivos PJL são bloqueados (Anti-Brick)."),
+# Nível 3 — Hard-Lock permanente (comandos PJL crus destrutivos na flash sem validação)
+TERMOS_HARD_LOCK = [
+    ("fsdelete", "Comandos PJL crus de exclusão na partição flash (FSDELETE) podem corromper o sistema operacional da impressora."),
+    ("fsdownload", "Comandos PJL crus de escrita direta na partição flash (FSDOWNLOAD) são bloqueados; use o envio oficial de firmware (.fls)."),
 ]
+
+
+@dataclass
+class PendingCriticalAction:
+    token: str
+    tool: str
+    kwargs: Dict[str, Any]
+    titulo: str
+    ip: str
+    modelo_detectado: str
+    serial_detectado: str
+    resumo_parametros: str
+    riscos: List[str]
+    criado_em: float
+
+    def expirou(self) -> bool:
+        return (time.time() - self.criado_em) > EXPIRACAO_CONFIRMACAO_SEG
+
+    def segundos_restantes(self) -> int:
+        return max(0, int(EXPIRACAO_CONFIRMACAO_SEG - (time.time() - self.criado_em)))
 
 
 @dataclass
 class AgentResponse:
     ok: bool
-    motor: str  # "ANTI-BRICK" | "LOCAL-OFFLINE" | "GEMINI-CLOUD"
+    motor: str  # "ANTI-BRICK" | "CONFIRMACAO-CRITICA" | "CRITICO-EXECUTADO" | "LOCAL-OFFLINE" | "GEMINI-CLOUD"
     acao: str
     mensagem: str
     dados: Optional[Dict[str, Any]] = None
+    confirmacao_pendente: Optional[PendingCriticalAction] = None
 
 
 def _normalizar(texto: str) -> str:
@@ -89,13 +116,24 @@ def salvar_config_agente(api_key: str, usar_llm: bool, modelo_gemini: str = "gem
 
 
 def _extrair_ip_alvo(texto_original: str, ip_padrao: str) -> str:
-    # 1. IPv4 completo no texto
+    # Em comandos de troca de IP ("mudar ip para X"), o IP alvo é o IP ATUAL (ip_padrao), não o novo!
+    norm = _normalizar(texto_original)
+    if any(k in norm for k in ("mudar ip", "alterar ip", "ip estatico", "definir ip", "trocar ip")):
+        m_da = re.search(r"\b(?:da|na|em)\s+(\d{1,3}(?:\.\d{1,3}){3})\b", texto_original, re.I)
+        if m_da:
+            return m_da.group(1)
+        m_curto = re.search(r"\b(?:na|da|em|impressora|maquina)\s+(\d{1,3})\b", norm)
+        if m_curto and ip_padrao and ip_padrao.count(".") == 3:
+            octeto = int(m_curto.group(1))
+            if 1 <= octeto <= 254:
+                return f"{'.'.join(ip_padrao.split('.')[:3])}.{octeto}"
+        return ip_padrao
+
     m_full = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", texto_original)
     if m_full:
         return m_full.group(1)
 
-    # 2. Abreviação do último octeto (ex.: "na 134", "da 134", "impressora 134", "ip 134")
-    m_curto = re.search(r"\b(?:na|da|em|para|ip|impressora|maquina)\s+(\d{1,3})\b", _normalizar(texto_original))
+    m_curto = re.search(r"\b(?:na|da|em|para|ip|impressora|maquina)\s+(\d{1,3})\b", norm)
     if m_curto and ip_padrao and ip_padrao.count(".") == 3:
         octeto = int(m_curto.group(1))
         if 1 <= octeto <= 254:
@@ -106,7 +144,7 @@ def _extrair_ip_alvo(texto_original: str, ip_padrao: str) -> str:
 
 
 def _extrair_texto_aspas(texto_original: str) -> Optional[str]:
-    m = re.search(r'["\']([^"\']{1,60})["\']', texto_original)
+    m = re.search(r'["\']([^"\']{1,260})["\']', texto_original)
     if m:
         return m.group(1).strip()
     return None
@@ -114,45 +152,354 @@ def _extrair_texto_aspas(texto_original: str) -> Optional[str]:
 
 def _texto_ajuda() -> str:
     return (
-        "🤖 COMANDOS QUE EU ENTENDO (100% OFFLINE E ANTI-BRICK):\n"
+        "🤖 COMANDOS QUE EU ENTENDO (100% OFFLINE):\n"
+        "\n🟢 OPERAÇÕES SEGURAS (execução imediata):\n"
         "• Diagnóstico completo : 'status', 'como está a 134?', 'quanto tem de toner?', 'contador de páginas'\n"
         "• Modo do Scanner (MFP): 'ver modo do scanner', 'desativar scanner', 'desativar adf', 'ativar scanner'\n"
         "• Visor LCD            : 'coloca \"MANUTENCAO TI\" no visor', 'limpar visor'\n"
         "• Tela Inicial (Botões): 'ver tela inicial', 'modo corporativo', 'modo smartphone',\n"
         "                         'ocultar fax', 'mostrar email', 'deixar só cópia e usb'\n"
         "• Relatório Zero-Driver: 'imprimir relatório de bancada', 'imprimir página de teste'\n"
-        "• Impressão Segura     : 'papel A4', 'papel carta', 'ativar duplex', 'desativar duplex',\n"
-        "                         'ligar modo eco', 'densidade 4'\n"
+        "• Impressão Segura     : 'papel A4', 'papel carta', 'ativar duplex', 'ligar modo eco', 'densidade 4'\n"
         "• Rede & Auditoria     : 'varrer rede', 'testar portas', 'variáveis pjl jam', 'limpar avisos'\n"
-        "\n🛡️ Blindagem Anti-Brick: firmware, wipe, NVRAM, factory reset e troca de IP são bloqueados no agente."
+        "\n🟠 OPERAÇÕES CRÍTICAS CONTROLADAS (pré-checagem + alerta + confirmação com PIN):\n"
+        "• Padrões de Fábrica   : 'restaurar padrões de fábrica' (ou '... rede' / '... apps')\n"
+        "• Limpar NVRAM         : 'apagar nvram'\n"
+        "• Wipe Fora de Serviço : 'wipe fora de serviço'\n"
+        "• IP Estático          : 'mudar ip estático para 192.168.14.200 mascara 255.255.255.0 gateway 192.168.14.254'\n"
+        "• Firmware (.fls)      : 'atualizar firmware \"C:\\caminho\\arquivo.fls\"'\n"
+        "• Confirmar / Cancelar : 'CONFIRMAR <PIN>' ou 'CANCELAR'\n"
+        "\n🔴 BLOQUEIO PERMANENTE: comandos PJL crus destrutivos na flash (FSDELETE / FSDOWNLOAD)."
     )
 
 
 class TerminalTIAgent:
-    """Orquestrador Híbrido (Motor A Local Offline + Motor B Gemini Cloud Opcional)."""
+    """Orquestrador Híbrido com Proteção em 3 Níveis."""
 
     def __init__(self):
         self.config = carregar_config_agente()
+        self.acao_pendente: Optional[PendingCriticalAction] = None
 
     def recarregar_config(self) -> Dict[str, Any]:
         self.config = carregar_config_agente()
         return self.config
 
-    def _checar_anti_brick(self, norm: str) -> Optional[AgentResponse]:
-        for termo, motivo in TERMOS_BLOQUEADOS_ANTI_BRICK:
+    def cancelar_acao_pendente(self) -> AgentResponse:
+        if self.acao_pendente is None:
+            return AgentResponse(
+                ok=True,
+                motor="LOCAL-OFFLINE",
+                acao="cancelar",
+                mensagem="ℹ️ Não há nenhuma operação crítica aguardando confirmação.",
+            )
+        titulo = self.acao_pendente.titulo
+        self.acao_pendente = None
+        return AgentResponse(
+            ok=True,
+            motor="LOCAL-OFFLINE",
+            acao="cancelado",
+            mensagem=f"❎ Operação crítica '{titulo}' CANCELADA com segurança. Nada foi alterado na impressora.",
+        )
+
+    def _checar_hard_lock(self, norm: str) -> Optional[AgentResponse]:
+        for termo, motivo in TERMOS_HARD_LOCK:
             if termo in norm:
                 return AgentResponse(
                     ok=False,
                     motor="ANTI-BRICK",
                     acao="BLOQUEADO",
                     mensagem=(
-                        f"🛡️ AÇÃO BLOQUEADA PELA BLINDAGEM ANTI-BRICK\n"
-                        f"• Motivo: {motivo}\n"
-                        f"• Para proteger o equipamento contra brick ou perda de acesso na rede, "
-                        f"o Agente só executa operações seguras e reversíveis da Whitelist.\n"
-                        f"• Se realmente precisar dessa operação crítica, faça manualmente na aba correspondente."
+                        f"🔴 AÇÃO BLOQUEADA PERMANENTEMENTE (HARD-LOCK ANTI-BRICK)\n"
+                        f"• Motivo: {motivo}"
                     ),
                 )
+        return None
+
+    def _preparar_confirmacao_critica(
+        self,
+        tool: str,
+        kwargs: Dict[str, Any],
+        titulo: str,
+        ip: str,
+        resumo_parametros: str,
+        riscos: List[str],
+        community: str,
+    ) -> AgentResponse:
+        if tool not in CRITICAL_TOOL_REGISTRY:
+            return AgentResponse(
+                ok=False,
+                motor="ANTI-BRICK",
+                acao="recusado",
+                mensagem=f"🛡️ Ferramenta crítica '{tool}' não reconhecida.",
+            )
+
+        # Identifica o equipamento ao vivo via SNMP para o técnico ter 100% de certeza do alvo
+        alvo = identificar_alvo_rapido(ip, community=community)
+        token = f"{random.randint(1000, 9999)}"
+        pending = PendingCriticalAction(
+            token=token,
+            tool=tool,
+            kwargs=kwargs,
+            titulo=titulo,
+            ip=ip,
+            modelo_detectado=alvo["modelo"],
+            serial_detectado=alvo["serial"],
+            resumo_parametros=resumo_parametros,
+            riscos=riscos,
+            criado_em=time.time(),
+        )
+        self.acao_pendente = pending
+
+        linhas_riscos = "\n".join(f"  ⚠️ {r}" for r in riscos)
+        msg = (
+            f"🟠 CONFIRMAÇÃO OBRIGATÓRIA — OPERAÇÃO CRÍTICA\n"
+            f"• Operação        : {titulo}\n"
+            f"• Impressora Alvo : {ip} ({alvo['modelo']} | Serial: {alvo['serial']})\n"
+            f"• Parâmetros      : {resumo_parametros}\n"
+            f"\nCONSEQUÊNCIAS E ALERTAS:\n{linhas_riscos}\n"
+            f"\n🔐 Para autorizar, digite:  CONFIRMAR {token}   (expira em {int(EXPIRACAO_CONFIRMACAO_SEG)}s)\n"
+            f"❎ Para abortar, digite:    CANCELAR"
+        )
+        return AgentResponse(
+            ok=True,
+            motor="CONFIRMACAO-CRITICA",
+            acao=f"aguardando_pin:{tool}",
+            mensagem=msg,
+            confirmacao_pendente=pending,
+        )
+
+    def _executar_acao_confirmada(self, pin_informado: str) -> AgentResponse:
+        pending = self.acao_pendente
+        if pending is None:
+            return AgentResponse(
+                ok=False,
+                motor="CONFIRMACAO-CRITICA",
+                acao="sem_pendencia",
+                mensagem="ℹ️ Não existe nenhuma operação crítica pendente para confirmar.",
+            )
+
+        if pending.expirou():
+            self.acao_pendente = None
+            return AgentResponse(
+                ok=False,
+                motor="CONFIRMACAO-CRITICA",
+                acao="expirado",
+                mensagem=(
+                    f"⏱️ O pedido de confirmação para '{pending.titulo}' EXPIROU (passaram-se mais de "
+                    f"{int(EXPIRACAO_CONFIRMACAO_SEG)}s). Por segurança, solicite o comando novamente."
+                ),
+            )
+
+        if str(pin_informado).strip() != pending.token:
+            return AgentResponse(
+                ok=False,
+                motor="CONFIRMACAO-CRITICA",
+                acao="pin_incorreto",
+                mensagem=(
+                    f"❌ PIN incorreto ('{pin_informado}'). Operação NÃO executada.\n"
+                    f"Digite exatamente 'CONFIRMAR {pending.token}' ou 'CANCELAR'."
+                ),
+            )
+
+        # Consome a pendência antes de executar (uso único — evita dupla execução!)
+        self.acao_pendente = None
+        func = CRITICAL_TOOL_REGISTRY[pending.tool]
+        try:
+            res = func(**pending.kwargs)
+            return AgentResponse(
+                ok=bool(res.get("ok", True)),
+                motor="CRITICO-EXECUTADO",
+                acao=pending.tool,
+                mensagem=res.get("resumo", str(res)),
+                dados=res,
+            )
+        except Exception as err:
+            return AgentResponse(
+                ok=False,
+                motor="CRITICO-EXECUTADO",
+                acao=pending.tool,
+                mensagem=f"❌ Erro ao executar operação crítica '{pending.titulo}': {err}",
+            )
+
+    def _resolver_critico_local(
+        self,
+        texto_original: str,
+        ip: str,
+        community: str,
+    ) -> Optional[AgentResponse]:
+        """
+        Detecta pedidos de Nível 2 (Operações Críticas Controladas), executa pré-checagem
+        rígida e SEMPRE exige confirmação humana com PIN + alerta de consequências.
+        """
+        norm = _normalizar(texto_original)
+
+        # 1. Wipe / Fora de Serviço
+        if any(k in norm for k in ("wipe", "fora de servico", "formatar disco", "apagar tudo")):
+            return self._preparar_confirmacao_critica(
+                tool="critico_wipe_fora_de_servico",
+                kwargs={"ip": ip},
+                titulo="Wipe Fora de Serviço (Memória Volátil + NVRAM + Disco)",
+                ip=ip,
+                resumo_parametros="Endpoint oficial /memwipe.html",
+                riscos=[
+                    "APAGA IRREVERSIVELMENTE todas as configurações, atalhos, certificados, senhas e trabalhos salvos.",
+                    "A impressora perderá configurações de rede personalizadas e reiniciará no assistente inicial de fábrica.",
+                    "NÃO desligue a energia durante o procedimento de limpeza.",
+                ],
+                community=community,
+            )
+
+        # 2. Apagar Memória NVRAM
+        if "nvram" in norm or "apagar memoria" in norm or "limpar memoria" in norm:
+            return self._preparar_confirmacao_critica(
+                tool="critico_apagar_nvram",
+                kwargs={"ip": ip},
+                titulo="Limpeza de Memória NVRAM",
+                ip=ip,
+                resumo_parametros="Endpoint oficial /erase_printer_memory.html",
+                riscos=[
+                    "Apaga configurações salvas na memória não volátil da impressora.",
+                    "A impressora será reiniciada automaticamente e poderá perder ajustes de bandeja/tela inicial.",
+                    "Recomendado exportar backup settingfile.ucf antes de prosseguir.",
+                ],
+                community=community,
+            )
+
+        # 3. Restaurar Padrões de Fábrica
+        if any(k in norm for k in ("padrao de fabrica", "padroes de fabrica", "factory reset", "reset de fabrica", "restaurar fabrica")):
+            if any(k in norm for k in ("rede", "network", "ip")):
+                escopo = "network"
+                escopo_desc = "network (Apenas configurações de Rede/TCP-IP)"
+                riscos = [
+                    "RESETA A PLACA DE REDE para DHCP/padrão de fábrica!",
+                    "A impressora VAI PERDER O IP ESTÁTICO ATUAL e ficará inacessível neste IP até descobrir o novo IP.",
+                    "Se estiver acessando remotamente, você perderá a conexão com a máquina imediatamente.",
+                ]
+            elif any(k in norm for k in ("app", "les", "esf", "soluc")):
+                escopo = "les"
+                escopo_desc = "les (Aplicativos embarcados eSF / Soluções)"
+                riscos = [
+                    "Restaura todos os aplicativos eSF (Scan to Network, atalhos e soluções) ao padrão.",
+                    "Configurações de rede e IP são mantidas, mas integrações eSF precisarão ser reconfiguradas.",
+                ]
+            else:
+                escopo = "base"
+                escopo_desc = "base (Definições gerais da impressora — mantém IP de rede)"
+                riscos = [
+                    "Apaga todas as configurações locais da impressora (bandejas, idioma, tela inicial, qualidade e atalhos).",
+                    "A impressora pode reiniciar automaticamente durante o processo.",
+                ]
+
+            return self._preparar_confirmacao_critica(
+                tool="critico_restaurar_fabrica",
+                kwargs={"ip": ip, "escopo": escopo},
+                titulo=f"Restaurar Padrões de Fábrica ({escopo})",
+                ip=ip,
+                resumo_parametros=f"Escopo: {escopo_desc}",
+                riscos=riscos,
+                community=community,
+            )
+
+        # 4. Mudar IP Estático
+        if any(k in norm for k in ("mudar ip", "alterar ip", "ip estatico", "definir ip", "trocar ip")):
+            ips_encontrados = re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", texto_original)
+            # Se o usuário citou "da 192.168.14.134 para 192.168.14.200 ...", ignora o primeiro se igual ao ip alvo
+            if len(ips_encontrados) >= 4 and ips_encontrados[0] == ip:
+                ips_encontrados = ips_encontrados[1:]
+
+            if len(ips_encontrados) < 3:
+                return AgentResponse(
+                    ok=False,
+                    motor="CONFIRMACAO-CRITICA",
+                    acao="parametros_incompletos",
+                    mensagem=(
+                        "⚠️ Para alterar o IP estático com segurança, informe IP, Máscara e Gateway completos.\n"
+                        "Exemplo:\n"
+                        "  mudar ip estático para 192.168.14.200 mascara 255.255.255.0 gateway 192.168.14.254"
+                    ),
+                )
+
+            novo_ip, mascara, gateway = ips_encontrados[0], ips_encontrados[1], ips_encontrados[2]
+            try:
+                val = validar_pre_voo_ip_estatico(novo_ip, mascara, gateway)
+            except ValueError as err:
+                return AgentResponse(
+                    ok=False,
+                    motor="CONFIRMACAO-CRITICA",
+                    acao="pre_voo_falhou",
+                    mensagem=f"❌ Pré-checagem de rede BLOQUEOU a troca de IP:\n• {err}",
+                )
+
+            return self._preparar_confirmacao_critica(
+                tool="critico_mudar_ip_estatico",
+                kwargs={
+                    "ip": ip,
+                    "novo_ip": val["novo_ip"],
+                    "mascara": val["mascara"],
+                    "gateway": val["gateway"],
+                },
+                titulo="Alterar IP Estático da Impressora",
+                ip=ip,
+                resumo_parametros=(
+                    f"IP Atual: {ip}  ➜  Novo IP: {val['novo_ip']} | "
+                    f"Máscara: {val['mascara']} | Gateway: {val['gateway']} (Sub-rede {val['rede']})"
+                ),
+                riscos=[
+                    f"A impressora deixará de responder em {ip} e passará a responder em {val['novo_ip']}.",
+                    "Certifique-se de que o IP escolhido NÃO está em uso por outro equipamento na rede (conflito de IP).",
+                    "Se o endereço estiver fora da faixa da rede do cliente/bancada, será necessário reconfigurar no painel físico.",
+                ],
+                community=community,
+            )
+
+        # 5. Atualizar Firmware (.fls / .bin)
+        if any(k in norm for k in ("firmware", ".fls", "atualizar codigo", "flash ")):
+            caminho = _extrair_texto_aspas(texto_original)
+            if not caminho:
+                m_path = re.search(r"([A-Za-z]:\\[^\s]+\.(?:fls|bin))", texto_original, re.I)
+                if m_path:
+                    caminho = m_path.group(1)
+
+            if not caminho:
+                return AgentResponse(
+                    ok=False,
+                    motor="CONFIRMACAO-CRITICA",
+                    acao="parametros_incompletos",
+                    mensagem=(
+                        "⚠️ Para atualizar o firmware com segurança, informe o caminho completo do arquivo .fls entre aspas.\n"
+                        'Exemplo:\n  atualizar firmware "C:\\Firmwares\\MX611_NH7.fls"'
+                    ),
+                )
+
+            try:
+                info_fw = validar_pre_voo_firmware(caminho)
+            except ValueError as err:
+                return AgentResponse(
+                    ok=False,
+                    motor="CONFIRMACAO-CRITICA",
+                    acao="pre_voo_falhou",
+                    mensagem=f"❌ Pré-checagem de firmware BLOQUEOU o envio:\n• {err}",
+                )
+
+            aviso_assinatura = (
+                "Cabeçalho compatível com container PJL/Lexmark detectado."
+                if info_fw["assinatura_lexmark"]
+                else "ATENÇÃO EXTRA: cabeçalho PJL/Lexmark não identificado nos primeiros 512 bytes — confira 2x se este arquivo é mesmo um firmware oficial!"
+            )
+            return self._preparar_confirmacao_critica(
+                tool="critico_atualizar_firmware",
+                kwargs={"ip": ip, "caminho_fls": info_fw["caminho"]},
+                titulo="Atualização de Firmware via HTTP (EWS)",
+                ip=ip,
+                resumo_parametros=f"Arquivo: {info_fw['nome']} ({info_fw['tamanho_mb']} MB) — {aviso_assinatura}",
+                riscos=[
+                    "RISCO DE BRICK SE O ARQUIVO NÃO FOR EXATAMENTE DA FAMÍLIA/MODELO DESTA IMPRESSORA!",
+                    "NUNCA DESLIGUE A ENERGIA OU O CABO DE REDE durante o envio e a gravação na flash (3 a 8 minutos).",
+                    "Confira acima se o Modelo detectado via SNMP corresponde ao firmware escolhido antes de digitar o PIN.",
+                ],
+                community=community,
+            )
+
         return None
 
     def _resolver_local(
@@ -161,32 +508,24 @@ class TerminalTIAgent:
         ip: str,
         community: str,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """
-        Motor A — Interpretador determinístico ultra-leve (0% CPU, 100% offline).
-        Retorna (nome_ferramenta_whitelist, kwargs) ou None se não casar diretamente.
-        """
+        """Motor A — Operações Seguras Nível 0/1 (Offline Local, 0% CPU)."""
         norm = _normalizar(texto_original)
 
-        # 0. Ajuda
         if norm in ("ajuda", "help", "?", "comandos") or "o que voce faz" in norm or "quais comandos" in norm:
             return ("__ajuda__", {})
 
-        # 1. Varredura de rede Lexmark
         if any(k in norm for k in ("varrer rede", "varre a rede", "buscar lexmark", "achar impressora", "achar lexmark", "descobrir impressora", "listar impressoras")):
             return ("escanear_rede_lexmark", {"ip_referencia": ip, "community": community})
 
-        # 2. Verificar portas / ping
         if any(k in norm for k in ("testar porta", "escanear porta", "scan de porta", "ver portas", "portas abertas", "dar ping", "pingar", "ping ")):
             return ("verificar_portas", {"ip": ip})
 
-        # 3. Relatório de bancada / Página de teste (Zero Driver 9100)
         if any(k in norm for k in ("imprim", "folha de teste", "pagina de teste", "relatorio de bancada", "relatorio tecnico")) and any(
             k in norm for k in ("relatorio", "teste", "bancada", "diagnostico", "folha")
         ):
             titulo = _extrair_texto_aspas(texto_original) or "RELATORIO DE BANCADA - TERMINAL TI"
             return ("imprimir_relatorio_bancada", {"ip": ip, "titulo": titulo, "community": community})
 
-        # 4. Controle validado do Modo do Scanner (MFP)
         if "scanner" in norm or "adf" in norm:
             if any(k in norm for k in ("desativar adf", "desligar adf", "desabilitar adf", "sem adf", "so mesa plana", "somente mesa plana")):
                 return ("definir_modo_scanner", {"ip": ip, "modo": "2"})
@@ -197,25 +536,21 @@ class TerminalTIAgent:
             if any(k in norm for k in ("ver", "ler", "qual", "status", "estado", "modo", "checar", "verificar", "como esta")):
                 return ("ler_modo_scanner", {"ip": ip})
 
-        # 5. Visor LCD (RDYMSG DISPLAY)
         if any(k in norm for k in ("visor", "display", "mensagem")):
             if any(k in norm for k in ("limp", "restaur", "voltar pronto", "padrao", "apagar mensagem", "tirar mensagem")):
                 return ("alterar_visor_lcd", {"ip": ip, "texto": ""})
             msg_aspas = _extrair_texto_aspas(texto_original)
             if msg_aspas is not None:
                 return ("alterar_visor_lcd", {"ip": ip, "texto": msg_aspas})
-            # Tenta capturar após "para ..." ou "como ..."
             m_para = re.search(r"(?:para|como|:)\s+(.+)$", texto_original, re.I)
             if m_para and any(k in norm for k in ("coloc", "escrev", "mud", "alter", "defin", "exib", "mostr", "bot")):
                 candidato = m_para.group(1).strip().strip("\"'")
                 if candidato:
                     return ("alterar_visor_lcd", {"ip": ip, "texto": candidato})
 
-        # 6. Limpar avisos
         if "limpar aviso" in norm or "limpa aviso" in norm or "clear warning" in norm:
             return ("limpar_avisos_painel", {"ip": ip})
 
-        # 7. Tela Inicial (botões / presets)
         if any(k in norm for k in ("tela inicial", "home", "botoes", "botao", "icone", "modo smartphone", "modo corporativo", "fax", "email", "e-mail", "pendrive")):
             if "smartphone" in norm:
                 return ("configurar_tela_inicial", {"ip": ip, "preset": "smartphone"})
@@ -226,7 +561,6 @@ class TerminalTIAgent:
             if any(k in norm for k in ("ocultar todos", "esconder todos", "nenhum botao")):
                 return ("configurar_tela_inicial", {"ip": ip, "preset": "nenhum"})
 
-            # Detecta "deixar só X e Y"
             if any(k in norm for k in ("deixar so", "deixa so", "apenas ", "somente ")):
                 encontrados = []
                 for alias in sorted(BOTOES_HOME_ALIASES.keys(), key=len, reverse=True):
@@ -235,7 +569,6 @@ class TerminalTIAgent:
                 if encontrados:
                     return ("configurar_tela_inicial", {"ip": ip, "manter_apenas": encontrados})
 
-            # Detecta ocultar / mostrar botões específicos
             eh_ocultar = any(k in norm for k in ("ocultar", "oculta", "esconder", "esconde", "tirar", "tira", "remover", "remove", "desativar botao"))
             eh_mostrar = any(k in norm for k in ("mostrar", "mostra", "exibir", "exibe", "ativar botao", "adicionar", "colocar botao"))
             if eh_ocultar or eh_mostrar:
@@ -256,7 +589,6 @@ class TerminalTIAgent:
             if any(k in norm for k in ("ver", "ler", "listar", "quais", "mostrar", "status")):
                 return ("ler_tela_inicial", {"ip": ip})
 
-        # 8. Configurações seguras de impressão (Papel / Duplex / Eco / Densidade)
         kwargs_imp: Dict[str, Any] = {}
         if "papel a4" in norm or "tamanho a4" in norm or "para a4" in norm:
             kwargs_imp["papel"] = "A4"
@@ -285,13 +617,11 @@ class TerminalTIAgent:
             kwargs_imp["ip"] = ip
             return ("configurar_impressao_segura", kwargs_imp)
 
-        # 9. Variáveis PJL (somente leitura)
         if "variaveis pjl" in norm or "variavel pjl" in norm or "info variables" in norm:
             m_f = re.search(r"(?:pjl|variables)\s+([a-z0-9_]+)", norm)
             filtro = m_f.group(1) if m_f else ""
             return ("ler_variaveis_pjl", {"ip": ip, "filtro": filtro})
 
-        # 10. Diagnóstico geral / status / toner / contador / serial
         if any(
             k in norm
             for k in (
@@ -327,7 +657,7 @@ class TerminalTIAgent:
                 ok=False,
                 motor="ANTI-BRICK",
                 acao=nome,
-                mensagem=f"🛡️ Ferramenta '{nome}' não pertence à Whitelist Anti-Brick e foi recusada.",
+                mensagem=f"🛡️ Ferramenta '{nome}' não pertence à Whitelist Segura e não pode ser executada sem confirmação.",
             )
 
         func = SAFE_TOOL_REGISTRY[nome]
@@ -350,8 +680,8 @@ class TerminalTIAgent:
 
     def _chamar_gemini_cloud(self, texto_usuario: str, ip: str, community: str) -> AgentResponse:
         """
-        Motor B — Consulta leve via REST HTTPS para Gemini na nuvem (zero CPU local).
-        Só permite responder em texto OU escolher uma ferramenta da Whitelist fechada.
+        Motor B — Gemini na nuvem (0% CPU local).
+        Restrito à Whitelist Segura; jamais pode auto-confirmar ações críticas.
         """
         api_key = str(self.config.get("api_key") or "").strip()
         modelo = str(self.config.get("modelo_gemini") or "gemini-2.5-flash").strip()
@@ -367,7 +697,7 @@ class TerminalTIAgent:
             )
 
         ferramentas_desc = """
-FERRAMENTAS PERMITIDAS (WHITELIST ANTI-BRICK):
+FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
 1. diagnostico_completo(ip, community)
 2. ler_modo_scanner(ip)
 3. definir_modo_scanner(ip, modo) -> modo: "0" (Ativado), "1" (Desativado), "2" (ADF Desativado)
@@ -387,9 +717,10 @@ FERRAMENTAS PERMITIDAS (WHITELIST ANTI-BRICK):
             f"IP alvo atual: {ip} | Comunidade SNMP: {community}.\n"
             f"{ferramentas_desc}\n"
             "REGRA ESTRITA: Responda EXCLUSIVAMENTE um JSON válido sem markdown:\n"
-            '- Para executar uma ferramenta da whitelist: {"tipo": "tool", "tool": "<nome>", "args": {...}}\n'
-            '- Para apenas responder/orientar o técnico: {"tipo": "texto", "resposta": "<texto em português>"}\n'
-            "NUNCA invente ferramentas fora da lista. NUNCA sugira comandos destrutivos."
+            '- Para executar uma ferramenta segura da lista: {"tipo": "tool", "tool": "<nome>", "args": {...}}\n'
+            '- Para responder/orientar o técnico: {"tipo": "texto", "resposta": "<texto em português>"}\n'
+            "NUNCA invente ferramentas fora da lista. Operações críticas (firmware, wipe, nvram, fábrica, IP) "
+            "exigem comando direto com pré-checagem e confirmação humana por PIN."
         )
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
@@ -440,8 +771,12 @@ FERRAMENTAS PERMITIDAS (WHITELIST ANTI-BRICK):
         community: str = "public",
     ) -> AgentResponse:
         """
-        Ponto único de entrada para executar comandos escritos pelo técnico.
-        Fluxo: Anti-Brick -> Motor A (Local Offline) -> Motor B (Gemini Cloud se ativo).
+        Fluxo de execução:
+        1. CONFIRMAR <PIN> / CANCELAR (para ações críticas pendentes)
+        2. Hard-Lock permanente (FSDELETE / FSDOWNLOAD)
+        3. Nível 2 — Ações Críticas Controladas (pré-checagem + alerta + PIN, sem executar direto!)
+        4. Nível 0/1 — Motor A (Local Offline)
+        5. Motor B — Gemini Cloud (opcional)
         """
         texto = str(texto_usuario or "").strip()
         if not texto:
@@ -449,20 +784,42 @@ FERRAMENTAS PERMITIDAS (WHITELIST ANTI-BRICK):
 
         norm = _normalizar(texto)
 
-        # 1. Camada Anti-Brick (sempre primeiro!)
-        bloqueio = self._checar_anti_brick(norm)
+        # 1. Confirmação ou cancelamento de ação crítica pendente
+        if norm in ("cancelar", "abortar", "nao", "cancel"):
+            return self.cancelar_acao_pendente()
+
+        m_conf = re.match(r"^confirmar\s+(\d{4})$", norm)
+        if m_conf:
+            return self._executar_acao_confirmada(m_conf.group(1))
+        if norm == "confirmar":
+            if self.acao_pendente and not self.acao_pendente.expirou():
+                return AgentResponse(
+                    ok=False,
+                    motor="CONFIRMACAO-CRITICA",
+                    acao="falta_pin",
+                    mensagem=f"⚠️ Por segurança, digite o PIN junto: CONFIRMAR {self.acao_pendente.token}",
+                )
+            return AgentResponse(ok=False, motor="CONFIRMACAO-CRITICA", acao="sem_pendencia", mensagem="ℹ️ Não há operação crítica pendente.")
+
+        # 2. Hard-Lock permanente (FSDELETE / FSDOWNLOAD)
+        bloqueio = self._checar_hard_lock(norm)
         if bloqueio is not None:
             return bloqueio
 
         ip_alvo = _extrair_ip_alvo(texto, ip_padrao)
 
-        # 2. Motor A (Local Offline, instantâneo)
+        # 3. Nível 2 — Operações Críticas Controladas (nunca executam sem PIN!)
+        critico_resp = self._resolver_critico_local(texto, ip_alvo, community)
+        if critico_resp is not None:
+            return critico_resp
+
+        # 4. Nível 0/1 — Motor A (Local Offline, instantâneo)
         resolvido = self._resolver_local(texto, ip_alvo, community)
         if resolvido is not None:
             nome_tool, kwargs = resolvido
             return self._executar_ferramenta_whitelist(nome_tool, kwargs, motor="LOCAL-OFFLINE")
 
-        # 3. Motor B (Gemini API na nuvem, se ativado e com chave)
+        # 5. Motor B (Gemini API na nuvem, se ativado e com chave)
         self.recarregar_config()
         if self.config.get("usar_llm") and self.config.get("api_key"):
             return self._chamar_gemini_cloud(texto, ip_alvo, community)
@@ -474,6 +831,6 @@ FERRAMENTAS PERMITIDAS (WHITELIST ANTI-BRICK):
             mensagem=(
                 f"🤔 Não reconheci o comando '{texto}' no modo Offline.\n"
                 "• Digite 'ajuda' para ver todos os comandos diretos suportados.\n"
-                "• Ou ative o modo '☁️ Híbrido + Gemini API' para perguntas livres e raciocínio assistido."
+                "• Ou ative o modo '☁️ Híbrido + Gemini API' para perguntas livres."
             ),
         )

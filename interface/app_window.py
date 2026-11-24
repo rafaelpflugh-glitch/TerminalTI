@@ -2507,7 +2507,7 @@ class TerminalTIApp:
 
         tk.Label(
             topo_ag,
-            text="🛡️ BLINDAGEM ANTI-BRICK ATIVA — Whitelist Fechada (Firmware, Wipe, NVRAM, Factory Reset e IP Estático BLOQUEADOS)",
+            text="🛡️ PROTEÇÃO EM 3 NÍVEIS — Seguras: diretas | Críticas (Firmware, Wipe, NVRAM, Fábrica, IP): Pré-Checagem + Alerta + PIN | FSDELETE: bloqueado",
             background=self.COR_PAINEL,
             foreground=self.COR_VERDE,
             font=("Segoe UI", 9, "bold"),
@@ -2742,7 +2742,15 @@ class TerminalTIApp:
             resp = self.agente_ti.processar_comando(cmd, ip_padrao=ip_atual, community=comunidade)
 
             def _concluir():
-                tag_cor = "ok" if resp.ok else ("warn" if resp.motor == "ANTI-BRICK" else "err")
+                if resp.motor == "CONFIRMACAO-CRITICA":
+                    tag_cor = "warn"
+                elif resp.ok:
+                    tag_cor = "ok"
+                elif resp.motor == "ANTI-BRICK":
+                    tag_cor = "warn"
+                else:
+                    tag_cor = "err"
+
                 self._escrever_chat_agente(
                     "meta",
                     f"   [{resp.motor} | ação: {resp.acao}]\n",
@@ -2752,6 +2760,153 @@ class TerminalTIApp:
                 self._status("● Pronto para operar", self.COR_VERDE if resp.ok else self.COR_AMARELO)
                 self.btn_enviar_agente.configure(state="normal")
 
+                if resp.confirmacao_pendente is not None:
+                    self._abrir_modal_confirmacao_critica(resp.confirmacao_pendente)
+
             self.root.after(0, _concluir)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _abrir_modal_confirmacao_critica(self, pending):
+        """
+        Janela modal de alta visibilidade exibindo alvo SNMP, parâmetros,
+        consequências detalhadas e exigindo digitação do PIN de 4 dígitos
+        para destravar a execução de operações críticas.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("⚠️ CONFIRMAÇÃO DE OPERAÇÃO CRÍTICA — TERMINAL TI")
+        win.geometry("620x440")
+        win.configure(background="#1a0d0e")
+        win.transient(self.root)
+        win.grab_set()
+
+        card = tk.Frame(
+            win,
+            background=self.COR_PAINEL,
+            highlightbackground=self.COR_VERMELHO,
+            highlightthickness=2,
+            padx=18,
+            pady=14,
+        )
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        card.columnconfigure(0, weight=1)
+
+        tk.Label(
+            card,
+            text=f"⚠️ OPERAÇÃO CRÍTICA: {pending.titulo}",
+            bg=self.COR_PAINEL,
+            fg=self.COR_VERMELHO,
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        info_alvo = (
+            f"Impressora Alvo : {pending.ip}\n"
+            f"Modelo / Serial : {pending.modelo_detectado}  |  Serial: {pending.serial_detectado}\n"
+            f"Parâmetros      : {pending.resumo_parametros}"
+        )
+        tk.Label(
+            card,
+            text=info_alvo,
+            bg="#0b0f14",
+            fg="#79c0ff",
+            font=("Consolas", 9),
+            anchor="w",
+            justify="left",
+            padx=10,
+            pady=8,
+            wraplength=540,
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+        tk.Label(
+            card,
+            text="CONSEQUÊNCIAS E ALERTAS DE SEGURANÇA:",
+            bg=self.COR_PAINEL,
+            fg=self.COR_AMARELO,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        riscos_txt = "\n".join(f"• {r}" for r in pending.riscos)
+        tk.Label(
+            card,
+            text=riscos_txt,
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO,
+            font=("Segoe UI", 9),
+            anchor="w",
+            justify="left",
+            wraplength=555,
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+
+        tk.Label(
+            card,
+            text=f"Digite o PIN  {pending.token}  abaixo para destravar a execução (expira em {pending.segundos_restantes()}s):",
+            bg=self.COR_PAINEL,
+            fg=self.COR_VERDE,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        var_pin = tk.StringVar()
+        ent_pin = tk.Entry(
+            card,
+            textvariable=var_pin,
+            font=("Consolas", 13, "bold"),
+            width=12,
+            bg=self.COR_PAINEL_2,
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            justify="center",
+        )
+        ent_pin.grid(row=5, column=0, sticky="w", ipady=5, pady=(0, 14))
+
+        botoes = tk.Frame(card, background=self.COR_PAINEL)
+        botoes.grid(row=6, column=0, columnspan=2, sticky="ew")
+
+        def _cancelar():
+            win.destroy()
+            self._enviar_comando_agente("CANCELAR")
+
+        def _confirmar():
+            pin = var_pin.get().strip()
+            win.destroy()
+            self._enviar_comando_agente(f"CONFIRMAR {pin}")
+
+        btn_cancel = ttk.Button(
+            botoes,
+            text="❎ Cancelar (Seguro)",
+            command=_cancelar,
+            style="TI.Secondary.TButton",
+        )
+        btn_cancel.pack(side="left")
+
+        btn_exec = tk.Button(
+            botoes,
+            text="⚠️ CONFIRMAR E EXECUTAR",
+            command=_confirmar,
+            state="disabled",
+            bg="#6e2c2c",
+            fg="#ffffff",
+            activebackground="#da3633",
+            activeforeground="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=14,
+            pady=6,
+            cursor="hand2",
+        )
+        btn_exec.pack(side="right")
+
+        def _checar_pin(*_args):
+            if var_pin.get().strip() == pending.token:
+                btn_exec.configure(state="normal", bg="#da3633")
+            else:
+                btn_exec.configure(state="disabled", bg="#6e2c2c")
+
+        var_pin.trace_add("write", _checar_pin)
+        win.protocol("WM_DELETE_WINDOW", _cancelar)
+        btn_cancel.focus_set()

@@ -21,6 +21,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import ipaddress
+from pathlib import Path
 import re
 import socket
 import time
@@ -760,7 +761,7 @@ def escanear_rede_lexmark(ip_referencia: str, community: str = "public") -> Dict
     return {"ok": True, "encontradas": encontradas, "resumo": "\n".join(linhas)}
 
 
-# Registro fechado (Whitelist) acessível pelo Agente
+# Registro fechado (Whitelist) acessível diretamente pelo Agente (Nível 0/1)
 SAFE_TOOL_REGISTRY = {
     "diagnostico_completo": diagnostico_completo,
     "ler_modo_scanner": ler_modo_scanner,
@@ -774,4 +775,167 @@ SAFE_TOOL_REGISTRY = {
     "verificar_portas": verificar_portas,
     "ler_variaveis_pjl": ler_variaveis_pjl,
     "escanear_rede_lexmark": escanear_rede_lexmark,
+}
+
+
+# ============================================================
+# 8. OPERAÇÕES CRÍTICAS CONTROLADAS (NÍVEL 2 — EXIGEM PRÉ-CHECAGEM + CONFIRMAÇÃO HUMANA)
+# ============================================================
+
+def identificar_alvo_rapido(ip: str, community: str = "public") -> Dict[str, str]:
+    """Lê rapidamente modelo, serial e display via SNMP antes de pedir confirmação crítica."""
+    ip = _validar_ip(ip)
+    modelo = _snmp_seguro(ip, "1.3.6.1.2.1.1.1.0", community, timeout=1.5)
+    serial = _snmp_seguro(ip, "1.3.6.1.2.1.43.5.1.1.17.1", community, timeout=1.5)
+    lcd = _snmp_seguro(ip, "1.3.6.1.2.1.43.16.5.1.2.1.1", community, timeout=1.5)
+    modelo_curto = modelo.split(" version ")[0].strip() if " version " in modelo else modelo[:60]
+    return {"ip": ip, "modelo": modelo_curto, "modelo_full": modelo, "serial": serial, "lcd": lcd}
+
+
+def validar_pre_voo_ip_estatico(novo_ip: str, mascara: str, gateway: str) -> Dict[str, str]:
+    """
+    Valida matematicamente IP, Máscara de Sub-rede e Gateway antes de permitir
+    a confirmação de mudança de IP estático (impede erro de digitação ou sub-rede inválida).
+    """
+    ip_obj = ipaddress.IPv4Address(str(novo_ip).strip())
+    gw_obj = ipaddress.IPv4Address(str(gateway).strip())
+    # Valida que a máscara é contígua e válida (ex.: 255.255.255.0)
+    try:
+        rede = ipaddress.IPv4Network(f"{ip_obj}/{str(mascara).strip()}", strict=False)
+    except ValueError as err:
+        raise ValueError(f"Máscara de sub-rede inválida: '{mascara}'") from err
+
+    if ip_obj == rede.network_address or ip_obj == rede.broadcast_address:
+        raise ValueError(f"O IP {ip_obj} não pode ser endereço de rede nem de broadcast ({rede}).")
+    if gw_obj not in rede:
+        raise ValueError(
+            f"O Gateway {gw_obj} não pertence à mesma sub-rede de {ip_obj}/{mascara} ({rede})."
+        )
+    if ip_obj == gw_obj:
+        raise ValueError("O novo IP da impressora não pode ser igual ao Gateway.")
+
+    return {
+        "novo_ip": str(ip_obj),
+        "mascara": str(rede.netmask),
+        "gateway": str(gw_obj),
+        "rede": str(rede),
+    }
+
+
+def validar_pre_voo_firmware(caminho_fls: str) -> Dict[str, Any]:
+    """
+    Pré-checagem obrigatória para atualização de firmware:
+    - arquivo precisa existir;
+    - extensão .fls (ou .bin);
+    - tamanho >= 100 KB (rejeita arquivos vazios/corrompidos/texto);
+    - inspeciona cabeçalho para confirmar assinatura PJL/UEL/Lexmark.
+    """
+    arq = Path(str(caminho_fls or "").strip().strip("\"'"))
+    if not arq.is_file():
+        raise ValueError(f"Arquivo de firmware não encontrado: '{arq}'")
+    if arq.suffix.lower() not in (".fls", ".bin"):
+        raise ValueError(f"Extensão inválida '{arq.suffix}'. Apenas arquivos .fls ou .bin são aceitos.")
+
+    tamanho = arq.stat().st_size
+    if tamanho < 100 * 1024:
+        raise ValueError(
+            f"Arquivo muito pequeno ({tamanho} bytes). Um firmware Lexmark real tem vários MB; "
+            "envio bloqueado para evitar risco de brick."
+        )
+
+    cabecalho = arq.read_bytes()[:512]
+    tem_assinatura_pjl = (b"\x1b%-12345X" in cabecalho) or (b"@PJL" in cabecalho) or (b"LEXMARK" in cabecalho.upper())
+
+    return {
+        "caminho": str(arq.resolve()),
+        "nome": arq.name,
+        "tamanho_mb": round(tamanho / (1024 * 1024), 2),
+        "assinatura_lexmark": tem_assinatura_pjl,
+    }
+
+
+def critico_restaurar_fabrica(ip: str, escopo: str = "base") -> Dict[str, Any]:
+    ip = _validar_ip(ip)
+    if escopo not in ("base", "network", "les"):
+        raise ValueError(f"Escopo inválido: '{escopo}'. Use 'base', 'network' ou 'les'.")
+    res = LexmarkEWSClient(ip, timeout=15.0).restaurar_padroes_fabrica(escopo=escopo)
+    return {
+        "ok": True,
+        "ip": ip,
+        "escopo": escopo,
+        "resumo": (
+            f"✅ Restauração de Padrões de Fábrica (escopo='{escopo}') enviada para {ip} (HTTP {res.get('status_code')}).\n"
+            "• A impressora pode reiniciar automaticamente para concluir a operação."
+        ),
+    }
+
+
+def critico_apagar_nvram(ip: str) -> Dict[str, Any]:
+    ip = _validar_ip(ip)
+    res = LexmarkEWSClient(ip, timeout=15.0).apagar_memoria_nvram()
+    return {
+        "ok": True,
+        "ip": ip,
+        "resumo": (
+            f"✅ Limpeza de Memória NVRAM acionada em {ip} (HTTP {res.get('status_code')}).\n"
+            "• Aguarde a controladora concluir a limpeza e reiniciar."
+        ),
+    }
+
+
+def critico_wipe_fora_de_servico(ip: str) -> Dict[str, Any]:
+    ip = _validar_ip(ip)
+    res = LexmarkEWSClient(ip, timeout=20.0).apagar_fora_de_servico_wipe()
+    return {
+        "ok": True,
+        "ip": ip,
+        "resumo": (
+            f"✅ Wipe Fora de Serviço acionado em {ip} (HTTP {res.get('status_code')}).\n"
+            "• A impressora apagará todos os dados/configurações e reiniciará no assistente inicial."
+        ),
+    }
+
+
+def critico_mudar_ip_estatico(ip: str, novo_ip: str, mascara: str, gateway: str) -> Dict[str, Any]:
+    ip = _validar_ip(ip)
+    validado = validar_pre_voo_ip_estatico(novo_ip, mascara, gateway)
+    res = LexmarkEWSClient(ip, timeout=15.0).gravar_ip_estatico(
+        validado["novo_ip"], validado["mascara"], validado["gateway"]
+    )
+    return {
+        "ok": True,
+        "ip": ip,
+        "novo_ip": validado["novo_ip"],
+        "resumo": (
+            f"✅ Novo IP Estático gravado em {ip} (HTTP {res.get('status_code')})!\n"
+            f"• Novo IP : {validado['novo_ip']}\n"
+            f"• Máscara : {validado['mascara']}\n"
+            f"• Gateway : {validado['gateway']}\n"
+            f"ℹ️ A placa de rede aplicará o endereço {validado['novo_ip']} — atualize o campo IP no topo do Terminal TI."
+        ),
+    }
+
+
+def critico_atualizar_firmware(ip: str, caminho_fls: str) -> Dict[str, Any]:
+    ip = _validar_ip(ip)
+    info = validar_pre_voo_firmware(caminho_fls)
+    res = LexmarkEWSClient(ip, timeout=30.0).enviar_firmware_http(info["caminho"])
+    return {
+        "ok": True,
+        "ip": ip,
+        "arquivo": info["nome"],
+        "resumo": (
+            f"✅ Firmware '{info['nome']}' ({info['tamanho_mb']} MB) enviado para {ip} (HTTP {res.get('status_code')})!\n"
+            "⚠️ NÃO DESLIGUE A IMPRESSORA! Aguarde a gravação na flash e a reinicialização completa (pode levar 3 a 8 minutos)."
+        ),
+    }
+
+
+# Registro separado — NUNCA chamado diretamente sem confirmação humana explícita com PIN
+CRITICAL_TOOL_REGISTRY = {
+    "critico_restaurar_fabrica": critico_restaurar_fabrica,
+    "critico_apagar_nvram": critico_apagar_nvram,
+    "critico_wipe_fora_de_servico": critico_wipe_fora_de_servico,
+    "critico_mudar_ip_estatico": critico_mudar_ip_estatico,
+    "critico_atualizar_firmware": critico_atualizar_firmware,
 }
