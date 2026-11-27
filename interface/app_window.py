@@ -14,7 +14,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import webbrowser
 
-from core.agent import TerminalTIAgent, carregar_config_agente, salvar_config_agente
+from core.agent import (
+    TerminalTIAgent,
+    carregar_config_agente,
+    salvar_config_agente,
+    testar_chave_gemini,
+)
 from core.catalog import (
     CONFIG_MF_OPCOES,
     DICIONARIO_COMANDOS,
@@ -2635,7 +2640,7 @@ class TerminalTIApp:
         tem_chave = bool(cfg.get("api_key"))
         ativo = bool(cfg.get("usar_llm"))
         if ativo and tem_chave:
-            return f"☁️ Gemini Ativo ({cfg.get('modelo_gemini', 'gemini-2.5-flash')})"
+            return f"☁️ Gemini Ativo ({cfg.get('modelo_gemini', 'gemini-flash-lite-latest')})"
         if ativo and not tem_chave:
             return "⚠️ Sem API Key (rodando Offline)"
         return "⚡ Motor Local Offline (0% CPU)"
@@ -2645,15 +2650,15 @@ class TerminalTIApp:
         salvar_config_agente(
             api_key=cfg.get("api_key", ""),
             usar_llm=self.var_agente_llm.get(),
-            modelo_gemini=cfg.get("modelo_gemini", "gemini-2.5-flash"),
+            modelo_gemini=cfg.get("modelo_gemini", "gemini-flash-lite-latest"),
         )
         self.lbl_status_llm.config(text=self._texto_status_llm())
 
     def _abrir_config_api_agente(self):
         cfg = self.agente_ti.recarregar_config()
         win = tk.Toplevel(self.root)
-        win.title("Configurar Gemini API (Opcional — Nuvem)")
-        win.geometry("520x250")
+        win.title("Configurar API Google Gemini (Nuvem — 0% CPU local)")
+        win.geometry("580x360")
         win.configure(background=self.COR_FUNDO)
         win.transient(self.root)
         win.grab_set()
@@ -2664,12 +2669,19 @@ class TerminalTIApp:
 
         tk.Label(
             frame,
-            text="Chave API do Google AI Studio (opcional — processa na nuvem sem pesar no PC):",
+            text="Chave API do Google AI Studio (processa na nuvem sem pesar em PCs fracos):",
             bg=self.COR_PAINEL,
             fg=self.COR_TEXTO,
             font=("Segoe UI", 9, "bold"),
             anchor="w",
         ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        ttk.Button(
+            frame,
+            text="🌐 Abrir Google AI Studio (Gerar Chave Grátis)",
+            command=lambda: webbrowser.open("https://aistudio.google.com/apikey"),
+            style="TI.Secondary.TButton",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 10))
 
         ent_key = tk.Entry(
             frame,
@@ -2679,43 +2691,80 @@ class TerminalTIApp:
             fg="#ffffff",
             insertbackground="#ffffff",
             relief="flat",
+            highlightbackground=self.COR_BORDA,
+            highlightthickness=1,
         )
         ent_key.insert(0, cfg.get("api_key", ""))
-        ent_key.grid(row=1, column=0, sticky="ew", ipady=5, pady=(0, 10))
+        ent_key.grid(row=2, column=0, sticky="ew", ipady=5, pady=(0, 4))
+
+        var_mostrar = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            frame,
+            text="Mostrar chave",
+            variable=var_mostrar,
+            command=lambda: ent_key.configure(show="" if var_mostrar.get() else "*"),
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO_SEC,
+            selectcolor=self.COR_PAINEL_2,
+            activebackground=self.COR_PAINEL,
+            font=("Segoe UI", 8),
+        ).grid(row=3, column=0, sticky="w", pady=(0, 10))
 
         tk.Label(
             frame,
-            text="Modelo Gemini (padrão rápido e gratuito no AI Studio):",
+            text="Modelo Google Gemini (padrão rápido e com nível gratuito no AI Studio):",
             bg=self.COR_PAINEL,
             fg=self.COR_TEXTO_SEC,
             font=("Segoe UI", 9),
             anchor="w",
-        ).grid(row=2, column=0, sticky="w", pady=(0, 4))
+        ).grid(row=4, column=0, sticky="w", pady=(0, 4))
 
-        ent_mod = tk.Entry(
+        cb_mod = ttk.Combobox(
             frame,
-            font=("Consolas", 10),
-            bg=self.COR_PAINEL_2,
-            fg="#ffffff",
-            insertbackground="#ffffff",
-            relief="flat",
+            values=("gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash", "gemini-pro-latest"),
+            style="TI.TCombobox",
         )
-        ent_mod.insert(0, cfg.get("modelo_gemini", "gemini-2.5-flash"))
-        ent_mod.grid(row=3, column=0, sticky="ew", ipady=4, pady=(0, 14))
+        cb_mod.set(cfg.get("modelo_gemini", "gemini-flash-lite-latest"))
+        cb_mod.grid(row=5, column=0, sticky="ew", pady=(0, 10))
+
+        lbl_teste = tk.Label(
+            frame,
+            text="Salvo localmente em config_agente.json (ignorado pelo Git).",
+            bg=self.COR_PAINEL,
+            fg=self.COR_TEXTO_SEC,
+            font=("Segoe UI", 8),
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        )
+        lbl_teste.grid(row=6, column=0, sticky="ew", pady=(0, 12))
+
+        barra_btns = tk.Frame(frame, background=self.COR_PAINEL)
+        barra_btns.grid(row=7, column=0, sticky="ew")
+
+        def _testar():
+            chave = ent_key.get().strip()
+            modelo = cb_mod.get().strip() or "gemini-flash-lite-latest"
+            lbl_teste.config(text="⏳ Testando conexão com Google Gemini...", fg=self.COR_AMARELO)
+
+            def _w():
+                ok, msg = testar_chave_gemini(chave, modelo)
+                win.after(0, lambda: lbl_teste.config(text=msg, fg=self.COR_VERDE if ok else self.COR_VERMELHO))
+
+            threading.Thread(target=_w, daemon=True).start()
 
         def _salvar():
             chave = ent_key.get().strip()
-            modelo = ent_mod.get().strip() or "gemini-2.5-flash"
+            modelo = cb_mod.get().strip() or "gemini-flash-lite-latest"
             usar = True if chave else False
             salvar_config_agente(chave, usar, modelo)
             self.var_agente_llm.set(usar)
             self.lbl_status_llm.config(text=self._texto_status_llm())
-            self._log("🔑 Configuração do Agente TI atualizada (salva localmente em config_agente.json).")
+            self._log("🔑 Configuração da API Google Gemini atualizada (salva em config_agente.json).")
             win.destroy()
 
-        ttk.Button(frame, text="💾 Salvar Configuração", command=_salvar, style="TI.Primary.TButton").grid(
-            row=4, column=0, sticky="e"
-        )
+        ttk.Button(barra_btns, text="🧪 Testar Conexão", command=_testar, style="TI.Secondary.TButton").pack(side="left")
+        ttk.Button(barra_btns, text="💾 Salvar e Ativar", command=_salvar, style="TI.Primary.TButton").pack(side="right")
 
     def _escrever_chat_agente(self, tag: str, texto: str):
         self.txt_chat_agente.configure(state="normal")

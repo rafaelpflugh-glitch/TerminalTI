@@ -669,6 +669,39 @@ showpage
     }
 
 
+RELATORIOS_NATIVOS_PJL: Dict[str, tuple] = {
+    "menus": ("LPRINTMENUS", "Página de Configurações de Menu (Nativa Lexmark)"),
+    "diretorio": ("LPRINTDIRECTORY", "Listagem de Diretório Interno (Nativa Lexmark)"),
+    "fontes_pcl": ("LPRINTPCLFONTS", "Lista de Fontes PCL (Nativa Lexmark)"),
+    "fontes_ps": ("LPRINTPSFONTS", "Lista de Fontes PostScript (Nativa Lexmark)"),
+}
+
+
+def imprimir_relatorio_nativo(ip: str, tipo: str = "menus") -> Dict[str, Any]:
+    """
+    Dispara relatórios internos nativos do firmware Lexmark via comandos PJL LPRINT*
+    na porta RAW 9100 (ex.: @PJL LPRINTMENUS).
+    """
+    ip = _validar_ip(ip)
+    chave = str(tipo or "menus").strip().lower()
+    if chave not in RELATORIOS_NATIVOS_PJL:
+        raise ValueError(
+            f"Tipo de relatório nativo inválido: '{tipo}'. Opções: {', '.join(RELATORIOS_NATIVOS_PJL)}"
+        )
+    cmd_pjl, descricao = RELATORIOS_NATIVOS_PJL[chave]
+    resp = enviar_pjl(ip, [cmd_pjl], encapsular_job=True, timeout=6.0)
+    return {
+        "ok": True,
+        "ip": ip,
+        "comando": f"@PJL {cmd_pjl}",
+        "resumo": (
+            f"🖨️ Comando nativo '@PJL {cmd_pjl}' enviado para {ip}!\n"
+            f"• Relatório: {descricao}\n"
+            f"• Retorno  : {resp}"
+        ),
+    }
+
+
 # ============================================================
 # 7. VARREDURA DE REDE, PORTAS E PJL SOMENTE-LEITURA
 # ============================================================
@@ -761,6 +794,177 @@ def escanear_rede_lexmark(ip_referencia: str, community: str = "public") -> Dict
     return {"ok": True, "encontradas": encontradas, "resumo": "\n".join(linhas)}
 
 
+# ============================================================
+# 7B. IDIOMA, RELÓGIO E PAINEL GERAL (EWS VALIDADO)
+# ============================================================
+
+IDIOMAS_MAPA: Dict[str, tuple] = {
+    "portugues": ("16", "Português (Brasil)"),
+    "pt": ("16", "Português (Brasil)"),
+    "pt-br": ("16", "Português (Brasil)"),
+    "ptbr": ("16", "Português (Brasil)"),
+    "brasil": ("16", "Português (Brasil)"),
+    "brazil": ("16", "Português (Brasil)"),
+    "ingles": ("0", "English (US)"),
+    "english": ("0", "English (US)"),
+    "en": ("0", "English (US)"),
+    "alemao": ("1", "Deutsch"),
+    "deutsch": ("1", "Deutsch"),
+    "german": ("1", "Deutsch"),
+    "frances": ("2", "Français"),
+    "francais": ("2", "Français"),
+    "french": ("2", "Français"),
+    "espanhol": ("4", "Español"),
+    "espanol": ("4", "Español"),
+    "spanish": ("4", "Español"),
+    "italiano": ("5", "Italiano"),
+    "italian": ("5", "Italiano"),
+    "dinamarques": ("6", "Dansk"),
+    "dansk": ("6", "Dansk"),
+    "noruegues": ("7", "Norsk"),
+    "norsk": ("7", "Norsk"),
+    "holandes": ("8", "Nederlands"),
+    "nederlands": ("8", "Nederlands"),
+    "japones": ("9", "日本語"),
+    "japanese": ("9", "日本語"),
+    "coreano": ("10", "한국어"),
+    "korean": ("10", "한국어"),
+    "chines tradicional": ("11", "繁體中文"),
+    "chines": ("12", "简体中文"),
+    "chinese": ("12", "简体中文"),
+    "sueco": ("13", "Svenska"),
+    "svenska": ("13", "Svenska"),
+    "finlandes": ("15", "Suomi"),
+    "suomi": ("15", "Suomi"),
+    "russo": ("17", "Русский"),
+    "russian": ("17", "Русский"),
+    "tcheco": ("18", "Česky"),
+    "cesky": ("18", "Česky"),
+    "polones": ("19", "Polski"),
+    "polski": ("19", "Polski"),
+    "hungaro": ("20", "Magyar"),
+    "magyar": ("20", "Magyar"),
+    "turco": ("21", "Türkçe"),
+    "turkce": ("21", "Türkçe"),
+    "turkish": ("21", "Türkçe"),
+    "grego": ("22", "Ελληνικά"),
+    "greek": ("22", "Ελληνικά"),
+}
+
+
+def alterar_idioma(ip: str, idioma: str = "portugues") -> Dict[str, Any]:
+    """
+    Altera o idioma oficial da interface LCD e páginas web (EWS) da impressora
+    via /cgi-bin/dynamic/printer/config/gen/general.html (campo 0.system.15).
+    """
+    ip = _validar_ip(ip)
+    norm = str(idioma or "").strip().lower()
+    norm = norm.translate(str.maketrans("áàãâéêíóôõúç", "aaaaeeiooouc"))
+
+    codigo = None
+    nome_oficial = None
+    for chave in sorted(IDIOMAS_MAPA.keys(), key=len, reverse=True):
+        if re.search(rf"\b{re.escape(chave)}\b", norm):
+            codigo, nome_oficial = IDIOMAS_MAPA[chave]
+            break
+
+    if codigo is None:
+        raise ValueError(
+            f"Idioma não reconhecido: '{idioma}'. Suportados: Português (Brasil), Inglês, Espanhol, Francês, Alemão, Italiano."
+        )
+
+    ews = LexmarkEWSClient(ip, timeout=10.0)
+    alteracoes = {"0.system.15": codigo}
+    if codigo == "16":
+        # Ajusta também formato de data DD-MM-AAAA e relógio 24h no padrão Brasil
+        alteracoes["0.system.16385"] = "1"
+        alteracoes["0.system.16713"] = "1"
+
+    ews.gravar_campos_formulario(
+        "/cgi-bin/dynamic/printer/config/gen/general.html",
+        alteracoes,
+        "/cgi-bin/posttest/printer/config/gen/general.html",
+    )
+    time.sleep(2.0)
+    _, _, _, valores_pos = ews.ler_formulario("/cgi-bin/dynamic/printer/config/gen/general.html")
+    cod_lido = str(valores_pos.get("0.system.15", ""))
+    lcd_atual = _snmp_seguro(ip, "1.3.6.1.2.1.43.16.5.1.2.1.1")
+
+    return {
+        "ok": cod_lido == codigo,
+        "ip": ip,
+        "codigo": cod_lido,
+        "idioma": nome_oficial,
+        "resumo": (
+            f"✅ Idioma alterado para {nome_oficial} em {ip} (0.system.15 = {cod_lido}).\n"
+            f"• Visor LCD atual (SNMP): \"{lcd_atual}\""
+        ),
+    }
+
+
+def sincronizar_relogio(ip: str) -> Dict[str, Any]:
+    """Sincroniza data/hora da impressora com o relógio do PC (UTC-03:00 Brasília)."""
+    ip = _validar_ip(ip)
+    agora_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ews = LexmarkEWSClient(ip, timeout=10.0)
+    ews.gravar_campos_formulario(
+        "/cgi-bin/dynamic/printer/config/secure/datetime.html",
+        {"1.system.4982": agora_str, "0.system.12360": "18"},
+        "/cgi-bin/posttest/printer/config/secure/datetime.html",
+    )
+    return {
+        "ok": True,
+        "ip": ip,
+        "data_hora": agora_str,
+        "resumo": f"✅ Relógio da impressora {ip} sincronizado com o PC: {agora_str} (UTC-03:00 Brasília).",
+    }
+
+
+def configurar_painel_geral(
+    ip: str,
+    brilho: Optional[int] = None,
+    bipe_adf: Optional[bool] = None,
+    ativar_vnc: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Ajusta brilho do LCD (20–100%), bipe do ADF e/ou ativa o Painel Remoto VNC."""
+    ip = _validar_ip(ip)
+    ews = LexmarkEWSClient(ip, timeout=10.0)
+    acoes: List[str] = []
+
+    alt_gen: Dict[str, str] = {}
+    if brilho is not None:
+        b = max(20, min(100, int(brilho)))
+        alt_gen["0.system.16720"] = str(b)
+        acoes.append(f"Brilho LCD = {b}%")
+    if bipe_adf is not None:
+        alt_gen["2.system.17245"] = "1" if bipe_adf else "0"
+        acoes.append(f"Bipe do ADF = {'Ativado' if bipe_adf else 'Desativado'}")
+
+    if alt_gen:
+        ews.gravar_campos_formulario(
+            "/cgi-bin/dynamic/printer/config/gen/general.html",
+            alt_gen,
+            "/cgi-bin/posttest/printer/config/gen/general.html",
+        )
+
+    if ativar_vnc:
+        ews.gravar_campos_formulario(
+            "/cgi-bin/dynamic/printer/config/remote_oppanel_config.html",
+            {"2.system.12849": "1", "0.system.12850": "1"},
+            "/cgi-bin/posttest/printer/config/remote_oppanel_config.html",
+        )
+        acoes.append("Painel Remoto VNC = Ativado (sem senha)")
+
+    if not acoes:
+        raise ValueError("Nenhuma preferência de painel foi informada.")
+
+    return {
+        "ok": True,
+        "ip": ip,
+        "resumo": f"✅ Preferências de painel aplicadas em {ip}:\n" + "\n".join(f"  • {a}" for a in acoes),
+    }
+
+
 # Registro fechado (Whitelist) acessível diretamente pelo Agente (Nível 0/1)
 SAFE_TOOL_REGISTRY = {
     "diagnostico_completo": diagnostico_completo,
@@ -772,9 +976,13 @@ SAFE_TOOL_REGISTRY = {
     "configurar_tela_inicial": configurar_tela_inicial,
     "configurar_impressao_segura": configurar_impressao_segura,
     "imprimir_relatorio_bancada": imprimir_relatorio_bancada,
+    "imprimir_relatorio_nativo": imprimir_relatorio_nativo,
     "verificar_portas": verificar_portas,
     "ler_variaveis_pjl": ler_variaveis_pjl,
     "escanear_rede_lexmark": escanear_rede_lexmark,
+    "alterar_idioma": alterar_idioma,
+    "sincronizar_relogio": sincronizar_relogio,
+    "configurar_painel_geral": configurar_painel_geral,
 }
 
 

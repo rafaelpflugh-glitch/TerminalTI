@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import random
 import re
@@ -37,6 +38,7 @@ import requests
 from core.safe_tools import (
     BOTOES_HOME_ALIASES,
     CRITICAL_TOOL_REGISTRY,
+    IDIOMAS_MAPA,
     SAFE_TOOL_REGISTRY,
     identificar_alvo_rapido,
     validar_pre_voo_firmware,
@@ -46,6 +48,12 @@ from core.safe_tools import (
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT_DIR / "config_agente.json"
 EXPIRACAO_CONFIRMACAO_SEG = 60.0
+MODELO_GEMINI_PADRAO = "gemini-flash-lite-latest"
+MODELOS_GEMINI_FALLBACK = (
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+)
 
 # Nível 3 — Hard-Lock permanente (comandos PJL crus destrutivos na flash sem validação)
 TERMOS_HARD_LOCK = [
@@ -94,7 +102,7 @@ def carregar_config_agente() -> Dict[str, Any]:
     padrao = {
         "usar_llm": False,
         "api_key": "",
-        "modelo_gemini": "gemini-2.5-flash",
+        "modelo_gemini": MODELO_GEMINI_PADRAO,
     }
     if CONFIG_PATH.is_file():
         try:
@@ -103,16 +111,101 @@ def carregar_config_agente() -> Dict[str, Any]:
                 padrao.update(dados)
         except Exception:
             pass
+
+    # Migra automaticamente modelo legado descontinuado para novas chaves
+    if str(padrao.get("modelo_gemini") or "").strip() == "gemini-2.5-flash":
+        padrao["modelo_gemini"] = MODELO_GEMINI_PADRAO
+
+    if not str(padrao.get("api_key") or "").strip():
+        env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+        if env_key.strip():
+            padrao["api_key"] = env_key.strip()
     return padrao
 
 
-def salvar_config_agente(api_key: str, usar_llm: bool, modelo_gemini: str = "gemini-2.5-flash") -> None:
+def salvar_config_agente(api_key: str, usar_llm: bool, modelo_gemini: str = MODELO_GEMINI_PADRAO) -> None:
     payload = {
         "usar_llm": bool(usar_llm),
         "api_key": str(api_key or "").strip(),
-        "modelo_gemini": str(modelo_gemini or "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        "modelo_gemini": str(modelo_gemini or MODELO_GEMINI_PADRAO).strip() or MODELO_GEMINI_PADRAO,
     }
     CONFIG_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _post_gemini_com_fallback(
+    api_key: str,
+    modelo_preferido: str,
+    payload: Dict[str, Any],
+    timeout: int = 20,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Chama a API REST do Google Gemini enviando a chave APENAS no header 'x-goog-api-key'
+    (nunca na URL, evitando vazamento em logs/erros), com fallback automático em 404/503/429.
+    """
+    candidatos: List[str] = []
+    for m in (modelo_preferido, *MODELOS_GEMINI_FALLBACK):
+        m_limpo = str(m or "").strip()
+        if m_limpo and m_limpo not in candidatos:
+            candidatos.append(m_limpo)
+
+    headers = {
+        "x-goog-api-key": str(api_key).strip(),
+        "Content-Type": "application/json",
+    }
+    ultimo_erro = "Nenhum modelo Gemini respondeu."
+
+    for mod in candidatos:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent"
+        for tentativa in range(2):
+            try:
+                r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            except Exception as err:
+                ultimo_erro = f"Falha de rede ({mod}): {err}"
+                break
+
+            if r.status_code == 200:
+                return mod, r.json()
+
+            try:
+                msg_api = r.json().get("error", {}).get("message", r.text[:220])
+            except Exception:
+                msg_api = r.text[:220]
+
+            if r.status_code in (400, 401, 403):
+                raise RuntimeError(f"Chave API inválida ou sem permissão (HTTP {r.status_code}): {msg_api}")
+
+            ultimo_erro = f"Modelo {mod} indisponível (HTTP {r.status_code}): {msg_api}"
+            if r.status_code == 503 and tentativa == 0:
+                time.sleep(1.2)
+                continue
+            if r.status_code in (404, 429, 503):
+                break
+            raise RuntimeError(ultimo_erro)
+
+    raise RuntimeError(ultimo_erro)
+
+
+def testar_chave_gemini(api_key: str, modelo: str = MODELO_GEMINI_PADRAO) -> Tuple[bool, str]:
+    """
+    Faz uma chamada mínima à API REST do Google Gemini (sem bibliotecas pesadas)
+    para validar chave, modelo e conectividade.
+    """
+    chave = str(api_key or "").strip()
+    mod = str(modelo or MODELO_GEMINI_PADRAO).strip() or MODELO_GEMINI_PADRAO
+    if not chave:
+        return False, "Informe uma API Key do Google AI Studio antes de testar."
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": "Responda apenas: OK"}]}],
+        "generationConfig": {"maxOutputTokens": 8, "temperature": 0.0},
+    }
+    try:
+        mod_usado, data = _post_gemini_com_fallback(chave, mod, payload, timeout=15)
+        txt = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        extra = f" (fallback de {mod})" if mod_usado != mod else ""
+        return True, f"✅ Conectado ao Google Gemini ({mod_usado}{extra})! Resposta: {txt}"
+    except Exception as err:
+        return False, f"❌ {err}"
 
 
 def _extrair_ip_alvo(texto_original: str, ip_padrao: str) -> str:
@@ -157,6 +250,8 @@ def _texto_ajuda() -> str:
         "• Diagnóstico completo : 'status', 'como está a 134?', 'quanto tem de toner?', 'contador de páginas'\n"
         "• Modo do Scanner (MFP): 'ver modo do scanner', 'desativar scanner', 'desativar adf', 'ativar scanner'\n"
         "• Visor LCD            : 'coloca \"MANUTENCAO TI\" no visor', 'limpar visor'\n"
+        "• Idioma / Relógio/VNC : 'mude o idioma para português do brasil', 'idioma inglês',\n"
+        "                         'sincronizar relógio', 'brilho 80%', 'desligar bipe do adf', 'ativar vnc'\n"
         "• Tela Inicial (Botões): 'ver tela inicial', 'modo corporativo', 'modo smartphone',\n"
         "                         'ocultar fax', 'mostrar email', 'deixar só cópia e usb'\n"
         "• Relatório Zero-Driver: 'imprimir relatório de bancada', 'imprimir página de teste'\n"
@@ -514,17 +609,63 @@ class TerminalTIAgent:
         if norm in ("ajuda", "help", "?", "comandos") or "o que voce faz" in norm or "quais comandos" in norm:
             return ("__ajuda__", {})
 
+        # Idioma do equipamento (antes de Tela Inicial para não conflitar com botão "Alterar Idioma")
+        if not any(k in norm for k in ("botao", "botoes", "icone", "tela inicial", "ocultar", "esconder")):
+            tem_gatilho_idioma = any(k in norm for k in ("idioma", "lingua", "linguagem", "language", "mudar para", "mude para", "colocar em", "trocar para"))
+            for alvo_lang in sorted(IDIOMAS_MAPA.keys(), key=len, reverse=True):
+                if len(alvo_lang) <= 2 and not tem_gatilho_idioma:
+                    continue
+                if re.search(rf"\b{re.escape(alvo_lang)}\b", norm):
+                    if tem_gatilho_idioma or len(alvo_lang) >= 5:
+                        return ("alterar_idioma", {"ip": ip, "idioma": alvo_lang})
+
+        # Relógio / Data e Hora
+        if any(k in norm for k in ("sincronizar relogio", "acertar relogio", "ajustar relogio", "acertar hora", "ajustar hora", "sincronizar hora", "data e hora", "hora do pc")):
+            return ("sincronizar_relogio", {"ip": ip})
+
+        # Painel Geral: Brilho LCD, Bipe ADF, VNC
+        kwargs_painel: Dict[str, Any] = {}
+        if "brilho" in norm:
+            m_b = re.search(r"(\d{2,3})\s*%?", norm)
+            if m_b:
+                kwargs_painel["brilho"] = int(m_b.group(1))
+        if "bipe" in norm or "beep" in norm:
+            if any(k in norm for k in ("deslig", "desativ", "tirar", "tira", "sem ", "silenci", "off")):
+                kwargs_painel["bipe_adf"] = False
+            elif any(k in norm for k in ("lig", "ativ", "habilit", "on", "com ")):
+                kwargs_painel["bipe_adf"] = True
+        if any(k in norm for k in ("ativar vnc", "ligar vnc", "habilitar vnc", "painel remoto", "espelhamento")):
+            kwargs_painel["ativar_vnc"] = True
+        if kwargs_painel:
+            kwargs_painel["ip"] = ip
+            return ("configurar_painel_geral", kwargs_painel)
+
         if any(k in norm for k in ("varrer rede", "varre a rede", "buscar lexmark", "achar impressora", "achar lexmark", "descobrir impressora", "listar impressoras")):
             return ("escanear_rede_lexmark", {"ip_referencia": ip, "community": community})
 
         if any(k in norm for k in ("testar porta", "escanear porta", "scan de porta", "ver portas", "portas abertas", "dar ping", "pingar", "ping ")):
             return ("verificar_portas", {"ip": ip})
 
+        # Relatórios nativos do firmware Lexmark (PJL LPRINT*)
+        if any(k in norm for k in ("imprim", "pagina de", "lista de")):
+            if any(k in norm for k in ("configuracoes de menu", "configuracao de menu", "pagina de menu", "lprintmenus", "menus da impressora")):
+                return ("imprimir_relatorio_nativo", {"ip": ip, "tipo": "menus"})
+            if any(k in norm for k in ("diretorio", "lprintdirectory")):
+                return ("imprimir_relatorio_nativo", {"ip": ip, "tipo": "diretorio"})
+            if "fontes pcl" in norm or "lista de fontes pcl" in norm:
+                return ("imprimir_relatorio_nativo", {"ip": ip, "tipo": "fontes_pcl"})
+            if "fontes ps" in norm or "fontes postscript" in norm:
+                return ("imprimir_relatorio_nativo", {"ip": ip, "tipo": "fontes_ps"})
+
         if any(k in norm for k in ("imprim", "folha de teste", "pagina de teste", "relatorio de bancada", "relatorio tecnico")) and any(
-            k in norm for k in ("relatorio", "teste", "bancada", "diagnostico", "folha")
+            k in norm for k in ("relatorio", "teste", "bancada", "diagnostico", "folha", "demonstracao", "ativo")
         ):
             titulo = _extrair_texto_aspas(texto_original) or "RELATORIO DE BANCADA - TERMINAL TI"
             return ("imprimir_relatorio_bancada", {"ip": ip, "titulo": titulo, "community": community})
+
+        # Cópia física / Digitalização física (explica uso via Painel Remoto VNC)
+        if any(k in norm for k in ("fazer copia", "tirar copia", "iniciar copia", "digitalizar pagina", "digitalizar documento", "escanear pagina", "escanear documento")):
+            return ("__aviso_copia_scan__", {"ip": ip})
 
         if "scanner" in norm or "adf" in norm:
             if any(k in norm for k in ("desativar adf", "desligar adf", "desabilitar adf", "sem adf", "so mesa plana", "somente mesa plana")):
@@ -634,7 +775,8 @@ class TerminalTIAgent:
                 "cilindro",
                 "suprimento",
                 "contador",
-                "paginas",
+                "total de paginas",
+                "quantas paginas",
                 "serial",
                 "modelo",
                 "informacoes",
@@ -651,6 +793,20 @@ class TerminalTIAgent:
     def _executar_ferramenta_whitelist(self, nome: str, kwargs: Dict[str, Any], motor: str) -> AgentResponse:
         if nome == "__ajuda__":
             return AgentResponse(ok=True, motor=motor, acao="ajuda", mensagem=_texto_ajuda())
+
+        if nome == "__aviso_copia_scan__":
+            ip_alvo = kwargs.get("ip", "")
+            return AgentResponse(
+                ok=True,
+                motor=motor,
+                acao="orientacao_vnc",
+                mensagem=(
+                    f"ℹ️ O firmware Lexmark não possui comando PJL/HTTP direto para disparar Cópia ou Digitalização física.\n"
+                    f"• Para clicar remotamente em 'Cópia' ou 'Digitalizar' na tela da {ip_alvo}:\n"
+                    f"  1) Digite 'ativar vnc' aqui no Agente.\n"
+                    f"  2) Abra o Painel Remoto em: http://{ip_alvo}/cgi-bin/dynamic/printer/config/remote_oppanel.html"
+                ),
+            )
 
         if nome not in SAFE_TOOL_REGISTRY:
             return AgentResponse(
@@ -684,7 +840,7 @@ class TerminalTIAgent:
         Restrito à Whitelist Segura; jamais pode auto-confirmar ações críticas.
         """
         api_key = str(self.config.get("api_key") or "").strip()
-        modelo = str(self.config.get("modelo_gemini") or "gemini-2.5-flash").strip()
+        modelo = str(self.config.get("modelo_gemini") or MODELO_GEMINI_PADRAO).strip()
         if not api_key:
             return AgentResponse(
                 ok=False,
@@ -710,6 +866,10 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
 10. verificar_portas(ip)
 11. ler_variaveis_pjl(ip, filtro)
 12. escanear_rede_lexmark(ip_referencia, community)
+13. alterar_idioma(ip, idioma) -> idioma: "portugues", "ingles", "espanhol", "frances", "alemao", "italiano", "turco", "russo", "japones", "coreano", "chines", "polones", "holandes", "sueco", "dinamarques", "noruegues", "finlandes", "tcheco", "hungaro", "grego"
+14. sincronizar_relogio(ip)
+15. configurar_painel_geral(ip, brilho, bipe_adf, ativar_vnc)
+16. imprimir_relatorio_nativo(ip, tipo) -> tipo: "menus" (@PJL LPRINTMENUS), "diretorio", "fontes_pcl", "fontes_ps"
 """
 
         prompt_sistema = (
@@ -723,7 +883,6 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
             "exigem comando direto com pré-checagem e confirmação humana por PIN."
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
         payload = {
             "contents": [
                 {"role": "user", "parts": [{"text": f"{prompt_sistema}\n\nPEDIDO DO TÉCNICO: {texto_usuario}"}]}
@@ -735,9 +894,7 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
         }
 
         try:
-            r = requests.post(url, json=payload, timeout=20)
-            r.raise_for_status()
-            data = r.json()
+            mod_usado, data = _post_gemini_com_fallback(api_key, modelo, payload, timeout=20)
             txt_json = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             parsed = json.loads(txt_json)
         except Exception as err:
@@ -748,6 +905,7 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
                 mensagem=f"❌ Falha ao consultar Gemini API na nuvem: {err}",
             )
 
+        motor_tag = f"GEMINI-CLOUD ({mod_usado})"
         if parsed.get("tipo") == "tool":
             tool_name = str(parsed.get("tool") or "").strip()
             args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
@@ -755,11 +913,11 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
                 args["ip"] = ip
             if tool_name == "escanear_rede_lexmark" and "ip_referencia" not in args:
                 args["ip_referencia"] = ip
-            return self._executar_ferramenta_whitelist(tool_name, args, motor="GEMINI-CLOUD")
+            return self._executar_ferramenta_whitelist(tool_name, args, motor=motor_tag)
 
         return AgentResponse(
             ok=True,
-            motor="GEMINI-CLOUD",
+            motor=motor_tag,
             acao="resposta_ia",
             mensagem=str(parsed.get("resposta") or txt_json),
         )
