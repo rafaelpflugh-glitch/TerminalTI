@@ -72,9 +72,43 @@ from core.safe_tools import (
 ROOT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 HIST_IPS_PATH = ROOT_DIR / "historico_ips.json"
+UI_PREFS_PATH = ROOT_DIR / "config_ui.json"
 
 _AGENTE_SINGLETON = TerminalTIAgent()
 _AGENTE_LOCK = threading.Lock()
+
+
+def _carregar_prefs_ui() -> Dict[str, Any]:
+    padrao: Dict[str, Any] = {
+        "theme": "light",
+        "last_ip": "",
+        "snmp_community": "public",
+        "last_view": "dashboard",
+        "backup_dir": str(ROOT_DIR / "Backups"),
+        "ntp_server": "a.st1.ntp.br",
+        "console_open": False,
+    }
+    if UI_PREFS_PATH.is_file():
+        try:
+            dados = json.loads(UI_PREFS_PATH.read_text(encoding="utf-8"))
+            if isinstance(dados, dict):
+                padrao.update(dados)
+        except Exception:
+            pass
+    return padrao
+
+
+def _salvar_prefs_ui(atualizacoes: Dict[str, Any]) -> Dict[str, Any]:
+    prefs = _carregar_prefs_ui()
+    permitidas = ("theme", "last_ip", "snmp_community", "last_view", "backup_dir", "ntp_server", "console_open")
+    for k in permitidas:
+        if k in atualizacoes and atualizacoes[k] is not None:
+            prefs[k] = atualizacoes[k]
+    try:
+        UI_PREFS_PATH.write_text(json.dumps(prefs, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    return prefs
 
 
 def _carregar_historico_ips(ip_inicial: str = "192.168.14.134") -> List[str]:
@@ -131,16 +165,19 @@ def _dispatch_api(path: str, body: Dict[str, Any], ip_inicial: str) -> Dict[str,
     ip = str(body.get("ip") or ip_inicial or "192.168.14.134").strip()
     community = str(body.get("community") or "public").strip() or "public"
 
-    # 1. Estado inicial / catálogo
+    # 1. Estado inicial / catálogo / preferências persistentes
     if path == "/api/state":
-        ips = _carregar_historico_ips(ip_inicial)
-        cred = obter_credenciais_ews(ip)
+        prefs = _carregar_prefs_ui()
+        ip_efetivo = str(prefs.get("last_ip") or ip_inicial or "192.168.14.134").strip()
+        ips = _carregar_historico_ips(ip_efetivo)
+        cred = obter_credenciais_ews(ip_efetivo)
         cfg_ag = carregar_config_agente()
         return {
             "ok": True,
-            "ip_inicial": ip_inicial,
+            "ip_inicial": ip_efetivo,
             "historico_ips": ips,
-            "backup_dir_padrao": str(ROOT_DIR / "Backups"),
+            "backup_dir_padrao": prefs.get("backup_dir") or str(ROOT_DIR / "Backups"),
+            "prefs": prefs,
             "auth_ativa": bool(cred and (cred.usuario or cred.senha or cred.pin or cred.usar_https)),
             "auth_https": bool(cred.usar_https) if cred else False,
             "agente": {
@@ -156,6 +193,10 @@ def _dispatch_api(path: str, body: Dict[str, Any], ip_inicial: str) -> Dict[str,
                 "tipos": [{"nome": n, "valor": v} for n, v in TIPO_PAPEL_OPCOES.items()],
             },
         }
+
+    if path == "/api/prefs":
+        prefs = _salvar_prefs_ui(body)
+        return {"ok": True, "prefs": prefs}
 
     # 2. Dashboard (Telemetria completa)
     if path == "/api/dashboard":
@@ -491,6 +532,12 @@ def _criar_handler(ip_inicial: str):
 
             mime, _ = mimetypes.guess_type(str(alvo))
             raw = alvo.read_bytes()
+            # Injeta o tema salvo direto no HTML para abrir sem nenhum "piscar" branco!
+            if rota == "/index.html":
+                tema = _carregar_prefs_ui().get("theme", "light")
+                if tema == "dark":
+                    html_txt = raw.decode("utf-8").replace('<html lang="pt-BR">', '<html lang="pt-BR" data-theme="dark">', 1)
+                    raw = html_txt.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", f"{mime or 'application/octet-stream'}; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
@@ -529,7 +576,13 @@ def _encontrar_navegador_app() -> Optional[str]:
     return None
 
 
-def _porta_livre() -> int:
+def _porta_livre(preferida: int = 18765) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", preferida))
+            return preferida
+        except OSError:
+            pass
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])

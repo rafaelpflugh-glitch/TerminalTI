@@ -74,28 +74,48 @@ function readFileAsBase64(file) {
 function openModal(id) { $(id).classList.add("open"); }
 function closeModal(id) { $(id).classList.remove("open"); }
 
+function savePrefs(partial) {
+  fetch("/api/prefs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(partial),
+  }).catch(() => {});
+}
+
 /* ---------- NAVEGAÇÃO (0 ms) ---------- */
-function switchView(viewId) {
+function switchView(viewId, persist = true) {
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
   const target = $(`view-${viewId}`);
   if (target) target.classList.add("active");
   const btn = document.querySelector(`.nav-item[data-view="${viewId}"]`);
   if (btn) btn.classList.add("active");
+  if (persist) savePrefs({ last_view: viewId });
 }
 
 /* ---------- INICIALIZAÇÃO ---------- */
 async function init() {
-  // Tema salvo
-  const savedTheme = localStorage.getItem("terminalti_theme") || "light";
-  if (savedTheme === "dark") document.documentElement.setAttribute("data-theme", "dark");
-  updateThemeIcon();
-
   try {
     const data = await api("/api/state", {}, "GET");
+    const prefs = data.prefs || {};
+
+    // Restaura tema persistido em disco (config_ui.json)
+    const tema = prefs.theme || "light";
+    if (tema === "dark") {
+      document.documentElement.setAttribute("data-theme", "dark");
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+    updateThemeIcon();
+
     $("ip-input").value = data.ip_inicial || "192.168.14.134";
     updateIpHistory(data.historico_ips || []);
-    $("inp-bkp-dir").value = data.backup_dir_padrao || "";
+    $("inp-bkp-dir").value = prefs.backup_dir || data.backup_dir_padrao || "";
+    if (prefs.snmp_community) $("snmp-community").value = prefs.snmp_community;
+    if (prefs.ntp_server) $("inp-ntp-server").value = prefs.ntp_server;
+    if (prefs.console_open) $("console-body").classList.add("open");
+    if (prefs.last_view && $(`view-${prefs.last_view}`)) switchView(prefs.last_view, false);
+
     updateAuthBadge(data.auth_ativa, data.auth_https);
 
     // Agente
@@ -111,7 +131,7 @@ async function init() {
     fillSelect("sel-tipo", data.catalogos.tipos, "0");
     renderHomeControls({ "2.system.17351": "1", "2.system.17252": "1" });
 
-    addLog("Terminal TI v2.0 inicializado (Interface Desktop Minimalista).");
+    addLog("Terminal TI v2.0 inicializado (preferências restauradas de config_ui.json).");
   } catch (err) {
     addLog("Erro ao carregar estado inicial: " + err.message);
   }
@@ -375,23 +395,27 @@ document.addEventListener("DOMContentLoaded", () => {
     b.addEventListener("click", () => closeModal(b.dataset.close));
   });
 
-  // Tema
+  // Tema (salvo em config_ui.json no disco!)
   $("btn-theme").addEventListener("click", () => {
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     if (isDark) {
       document.documentElement.removeAttribute("data-theme");
-      localStorage.setItem("terminalti_theme", "light");
+      savePrefs({ theme: "light" });
     } else {
       document.documentElement.setAttribute("data-theme", "dark");
-      localStorage.setItem("terminalti_theme", "dark");
+      savePrefs({ theme: "dark" });
     }
     updateThemeIcon();
   });
 
-  // Topbar
-  $("btn-connect").addEventListener("click", () => { switchView("dashboard"); refreshDashboard(); });
-  $("btn-refresh-dash").addEventListener("click", refreshDashboard);
-  $("ip-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { switchView("dashboard"); refreshDashboard(); } });
+  // Topbar + persistência de IP e SNMP
+  $("btn-connect").addEventListener("click", () => { savePrefs({ last_ip: currentIp() }); switchView("dashboard"); refreshDashboard(); });
+  $("btn-refresh-dash").addEventListener("click", () => { savePrefs({ last_ip: currentIp() }); refreshDashboard(); });
+  $("ip-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { savePrefs({ last_ip: currentIp() }); switchView("dashboard"); refreshDashboard(); } });
+  $("ip-input").addEventListener("change", () => savePrefs({ last_ip: currentIp() }));
+  $("snmp-community").addEventListener("change", () => savePrefs({ snmp_community: currentCommunity() }));
+  $("inp-ntp-server").addEventListener("change", () => savePrefs({ ntp_server: $("inp-ntp-server").value.trim() }));
+  $("inp-bkp-dir").addEventListener("change", () => savePrefs({ backup_dir: $("inp-bkp-dir").value.trim() }));
   $("btn-open-ews").addEventListener("click", () => {
     const proto = state.authHttps ? "https" : "http";
     window.open(`${proto}://${currentIp()}`, "_blank");
@@ -399,7 +423,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Console Drawer
   $("btn-console-toggle").addEventListener("click", () => {
-    $("console-body").classList.toggle("open");
+    const aberto = $("console-body").classList.toggle("open");
+    savePrefs({ console_open: aberto });
   });
   $("btn-log-clear").addEventListener("click", () => {
     $("console-log").textContent = "";
@@ -683,7 +708,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("btn-bkp-pick").addEventListener("click", async () => {
     const r = await api("/api/backup/pick_folder", { inicial: $("inp-bkp-dir").value });
-    if (r.pasta) $("inp-bkp-dir").value = r.pasta;
+    if (r.pasta) {
+      $("inp-bkp-dir").value = r.pasta;
+      savePrefs({ backup_dir: r.pasta });
+    }
   });
   $("btn-bkp-export").addEventListener("click", async () => {
     const r = await api("/api/backup/export", {
