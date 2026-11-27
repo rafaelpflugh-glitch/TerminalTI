@@ -686,15 +686,19 @@ Operações críticas (firmware, wipe, NVRAM, fábrica, IP estático) sempre exi
 
   <!-- ==================== MODAL: DESCOBRIR REDE ==================== -->
   <div class="modal-backdrop" id="modal-discover">
-    <div class="modal" style="max-width:640px;">
+    <div class="modal" style="max-width:780px;">
       <div class="modal-header">
-        <h3 class="modal-title">Impressoras Lexmark na Rede</h3>
-        <button class="btn btn-sm" data-close="modal-discover">Fechar</button>
+        <h3 class="modal-title">Descoberta Híbrida de Impressoras</h3>
+        <div class="btn-row">
+          <label class="toggle-item" style="padding:4px 9px; font-size:12px;"><input type="checkbox" id="chk-only-lexmark" checked /> Somente Lexmark</label>
+          <button class="btn btn-sm" id="btn-discover-rerun">Varrer novamente</button>
+          <button class="btn btn-sm" data-close="modal-discover">Fechar</button>
+        </div>
       </div>
-      <div class="muted mb-12" id="discover-status">Varrendo sub-rede local (porta 9100 + SNMP)...</div>
-      <div class="table-wrap" style="max-height:290px; overflow-y:auto;">
+      <div class="muted mb-12" id="discover-status">Detectando interfaces do PC e enviando WSD / mDNS / SNMP Broadcast / TCP 9100...</div>
+      <div class="table-wrap" style="max-height:330px; overflow-y:auto;">
         <table>
-          <thead><tr><th>IP</th><th>Modelo</th><th>Serial</th><th>Páginas</th><th></th></tr></thead>
+          <thead><tr><th>IP</th><th>Modelo</th><th>Serial</th><th>Páginas</th><th>Toner</th><th>Descoberto via</th><th></th></tr></thead>
           <tbody id="discover-tbody"></tbody>
         </table>
       </div>

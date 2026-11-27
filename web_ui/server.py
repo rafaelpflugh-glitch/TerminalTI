@@ -235,9 +235,13 @@ def _dispatch_api(path: str, body: Dict[str, Any], ip_inicial: str) -> Dict[str,
             "auth_https": bool(cred.usar_https) if cred else False,
         }
 
-    # 3. Descoberta de rede Lexmark
+    # 3. Descoberta híbrida de rede (Interfaces PC + WSD + mDNS + SNMP Broadcast + TCP 9100)
     if path == "/api/discover":
-        return escanear_rede_lexmark(ip, community=community)
+        return escanear_rede_lexmark(
+            ip_referencia=ip,
+            community=community,
+            somente_lexmark=bool(body.get("somente_lexmark", True)),
+        )
 
     # 4. Autenticação EWS / HTTPS (somente RAM)
     if path == "/api/auth/set":

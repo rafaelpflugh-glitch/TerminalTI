@@ -31,6 +31,7 @@ from core.backup_exporter import exportar_backup_estruturado
 from core.catalog import ICONES_HOME_CAMPOS, MODO_SCANNER_OPCOES
 from core.esf_manager import listar_apps_embarcados
 from core.ews_client import EWSClientError, LexmarkEWSClient
+from core.network_discovery import descobrir_impressoras_hibrido
 from core.ntp_brasil import sincronizar_hora_brasilia
 from core.pjl_snmp_client import (
     UEL,
@@ -748,53 +749,20 @@ def ler_variaveis_pjl(ip: str, filtro: str = "") -> Dict[str, Any]:
     }
 
 
-def escanear_rede_lexmark(ip_referencia: str, community: str = "public") -> Dict[str, Any]:
+def escanear_rede_lexmark(
+    ip_referencia: str = "",
+    community: str = "public",
+    somente_lexmark: bool = True,
+) -> Dict[str, Any]:
     """
-    Varre a sub-rede /24 do IP de referência buscando impressoras Lexmark ativas
-    na porta 9100 + SNMP sysDescr (100% somente-leitura).
+    Executa descoberta híbrida (Interfaces ativas do PC + WS-Discovery + mDNS + SNMP Broadcast + TCP 9100)
+    buscando impressoras Lexmark (ou todas, se somente_lexmark=False). 100% somente-leitura.
     """
-    ip_ref = _validar_ip(ip_referencia)
-    prefixo = ".".join(ip_ref.split(".")[:3])
-    alvos = [f"{prefixo}.{i}" for i in range(1, 255)]
-    encontradas: List[Dict[str, str]] = []
-
-    def _checar(host: str) -> Optional[Dict[str, str]]:
-        try:
-            with socket.create_connection((host, 9100), timeout=0.35):
-                pass
-        except OSError:
-            return None
-        desc = _snmp_seguro(host, "1.3.6.1.2.1.1.1.0", community, timeout=0.9)
-        if "lexmark" not in desc.lower():
-            return None
-        modelo = desc.split(" version ")[0].strip() if " version " in desc else desc[:45]
-        serial = _snmp_seguro(host, "1.3.6.1.2.1.43.5.1.1.17.1", community, timeout=0.9)
-        pags = _snmp_seguro(host, "1.3.6.1.2.1.43.10.2.1.4.1.1", community, timeout=0.9)
-        lcd = _snmp_seguro(host, "1.3.6.1.2.1.43.16.5.1.2.1.1", community, timeout=0.9)
-        return {"ip": host, "modelo": modelo, "serial": serial, "paginas": pags, "lcd": lcd}
-
-    with ThreadPoolExecutor(max_workers=48) as pool:
-        futs = [pool.submit(_checar, h) for h in alvos]
-        for f in as_completed(futs):
-            res = f.result()
-            if res:
-                encontradas.append(res)
-
-    encontradas.sort(key=lambda x: tuple(int(p) for p in x["ip"].split(".")))
-    if not encontradas:
-        return {
-            "ok": True,
-            "encontradas": [],
-            "resumo": f"🔎 Nenhuma impressora Lexmark respondeu na sub-rede {prefixo}.0/24.",
-        }
-
-    linhas = [f"🔎 IMPRESSORAS LEXMARK ENCONTRADAS EM {prefixo}.0/24 ({len(encontradas)}):"]
-    for item in encontradas:
-        linhas.append(
-            f"• {item['ip']:15} | {item['modelo']} | Serial: {item['serial']} | "
-            f"Págs: {item['paginas']} | LCD: {item['lcd']}"
-        )
-    return {"ok": True, "encontradas": encontradas, "resumo": "\n".join(linhas)}
+    return descobrir_impressoras_hibrido(
+        ip_referencia=ip_referencia,
+        community=community,
+        somente_lexmark=somente_lexmark,
+    )
 
 
 # ============================================================

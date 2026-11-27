@@ -475,24 +475,29 @@ document.addEventListener("DOMContentLoaded", () => {
     closeModal("modal-auth");
   });
 
-  // Modal Descobrir Rede
-  $("btn-discover").addEventListener("click", async () => {
-    openModal("modal-discover");
-    $("discover-status").textContent = `Varrendo sub-rede de ${currentIp()} (porta 9100 + SNMP)...`;
+  // Modal Descobrir Rede (Híbrido: Interfaces PC + WSD + mDNS + SNMP Broadcast + TCP 9100)
+  async function runNetworkDiscovery() {
+    const onlyLex = $("chk-only-lexmark").checked;
+    $("discover-status").textContent = "Detectando placas de rede do PC e executando WSD (3702) + mDNS (5353) + SNMP Broadcast + TCP 9100...";
     $("discover-tbody").innerHTML = "";
     try {
-      const res = await api("/api/discover");
+      const res = await api("/api/discover", { somente_lexmark: onlyLex });
       const list = res.encontradas || [];
-      $("discover-status").textContent = `${list.length} impressora(s) Lexmark encontrada(s).`;
+      const redes = (res.subredes || []).map((s) => `${s.cidr} (${s.interface})`).join(" • ");
+      $("discover-status").textContent = `${list.length} impressora(s) encontrada(s) em ${res.duracao_seg || "?"}s — Redes: ${redes}`;
+      addLog(res.resumo);
       if (!list.length) {
-        $("discover-tbody").innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;">Nenhuma Lexmark encontrada nesta sub-rede.</td></tr>';
+        $("discover-tbody").innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center; padding:18px;">Nenhuma impressora encontrada nas redes ativas.</td></tr>';
         return;
       }
       list.forEach((item) => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="mono"><strong>${item.ip}</strong></td><td>${item.modelo}</td><td class="mono">${item.serial}</td><td class="mono">${item.paginas}</td><td style="text-align:right;"><button class="btn btn-sm btn-primary">Usar</button></td>`;
+        const ton = item.toner_pct !== null && item.toner_pct !== undefined ? `${item.toner_pct}%` : "N/D";
+        const badges = (item.metodos || []).map((m) => `<span class="badge badge-muted" style="margin-right:3px;">${m}</span>`).join("");
+        tr.innerHTML = `<td class="mono"><strong>${item.ip}</strong></td><td>${item.modelo}</td><td class="mono">${item.serial}</td><td class="mono">${item.paginas}</td><td class="mono">${ton}</td><td>${badges}</td><td style="text-align:right;"><button class="btn btn-sm btn-primary">Usar</button></td>`;
         tr.querySelector("button").addEventListener("click", () => {
           $("ip-input").value = item.ip;
+          savePrefs({ last_ip: item.ip });
           closeModal("modal-discover");
           switchView("dashboard");
           refreshDashboard();
@@ -500,7 +505,11 @@ document.addEventListener("DOMContentLoaded", () => {
         $("discover-tbody").appendChild(tr);
       });
     } catch (e) { $("discover-status").textContent = e.message; }
-  });
+  }
+
+  $("btn-discover").addEventListener("click", () => { openModal("modal-discover"); runNetworkDiscovery(); });
+  $("btn-discover-rerun").addEventListener("click", runNetworkDiscovery);
+  $("chk-only-lexmark").addEventListener("change", runNetworkDiscovery);
 
   // Ações Rápidas (Dashboard)
   $("qa-ntp").addEventListener("click", async () => {
