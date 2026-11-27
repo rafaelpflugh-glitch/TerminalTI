@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terminal TI — Central Operacional Lexmark</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ==================== TOPBAR ==================== -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 6 2 18 2 18 9"></polyline>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+            <rect x="6" y="14" width="12" height="8"></rect>
+          </svg>
+        </div>
+        <span class="brand-name">Terminal TI</span>
+        <span class="version-pill">v2.0</span>
+      </div>
+
+      <div class="topbar-center">
+        <div class="ip-group">
+          <span class="ip-prefix">IP</span>
+          <input id="ip-input" class="ip-input" list="ip-history" value="192.168.14.134" autocomplete="off" />
+          <datalist id="ip-history"></datalist>
+        </div>
+
+        <button class="btn" id="btn-discover" title="Varrer sub-rede local buscando Lexmarks">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          Rede
+        </button>
+
+        <div class="status-pill" id="top-device-pill">
+          <span class="dot" id="top-device-dot"></span>
+          <span id="top-device-label">Não conectado</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="btn" id="btn-auth">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          <span id="btn-auth-label">Login EWS</span>
+        </button>
+
+        <button class="btn btn-primary" id="btn-connect">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+          Conectar
+        </button>
+
+        <button class="btn btn-icon" id="btn-theme" title="Alternar tema claro / escuro">
+          <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ==================== SIDEBAR ==================== -->
+    <aside class="sidebar">
+      <div>
+        <div class="nav-section-label">Operação</div>
+        <button class="nav-item active" data-view="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>
+          Visão Geral
+        </button>
+        <button class="nav-item" data-view="agent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          Agente TI
+        </button>
+        <button class="nav-item" data-view="home-paper">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          Tela Inicial e Papel
+        </button>
+        <button class="nav-item" data-view="system">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          Sistema e Scanner
+        </button>
+
+        <div class="nav-divider"></div>
+        <div class="nav-section-label">Implantação</div>
+        <button class="nav-item" data-view="esf">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          Embarcados (NDD)
+        </button>
+        <button class="nav-item" data-view="backup">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Backup e Clonagem
+        </button>
+
+        <div class="nav-divider"></div>
+        <div class="nav-section-label">Diagnóstico</div>
+        <button class="nav-item" data-view="engineering">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          Engenharia
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="field">
+          <label for="snmp-community">Comunidade SNMP</label>
+          <select id="snmp-community" class="select" style="height: 30px; font-size: 12px;">
+            <option value="public" selected>public</option>
+            <option value="private">private</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+        <button class="btn btn-sm" id="btn-open-ews" style="width: 100%;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+          Abrir EWS no navegador
+        </button>
+      </div>
+    </aside>
+
+    <!-- ==================== MAIN CONTENT ==================== -->
+    <main class="main-area">
+
+      <!-- 1. VISÃO GERAL -->
+      <section class="view active" id="view-dashboard">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Visão Geral</h1>
+            <p class="page-sub">Telemetria em tempo real, nível de suprimentos e rotinas frequentes de bancada.</p>
+          </div>
+          <button class="btn" id="btn-refresh-dash">Atualizar leitura</button>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+            <div>
+              <div style="font-size:16px; font-weight:700;" id="dash-model">Aguardando leitura do equipamento</div>
+              <div class="muted" id="dash-fw" style="margin-top:2px;">Clique em Conectar no topo para consultar SNMP, PJL e EWS.</div>
+            </div>
+            <div class="status-pill" id="dash-lcd-pill">
+              <span class="dot" id="dash-lcd-dot"></span>
+              <span id="dash-lcd">—</span>
+            </div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-item"><span>Número de Série</span><strong class="mono" id="dash-serial">—</strong></div>
+            <div class="meta-item"><span>Contador Vitalício</span><strong class="mono" id="dash-pages">—</strong></div>
+            <div class="meta-item"><span>Relógio / NTP</span><strong class="mono" id="dash-clock">—</strong></div>
+            <div class="meta-item"><span>Módulo Scanner</span><strong id="dash-scanner">—</strong></div>
+          </div>
+        </div>
+
+        <div class="grid-2 mb-12">
+          <div class="card" style="margin-bottom:0;">
+            <div class="supply-header">
+              <div>
+                <div class="card-title" id="sup1-name">Suprimento #1 (Toner)</div>
+                <div class="card-desc" id="sup1-sub">Sem leitura</div>
+              </div>
+              <div class="supply-pct" id="sup1-pct">—</div>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="sup1-bar"></div></div>
+          </div>
+
+          <div class="card" style="margin-bottom:0;">
+            <div class="supply-header">
+              <div>
+                <div class="card-title" id="sup2-name">Suprimento #2 (Unid. Imagem)</div>
+                <div class="card-desc" id="sup2-sub">Sem leitura</div>
+              </div>
+              <div class="supply-pct" id="sup2-pct">—</div>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="sup2-bar"></div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Ações Rápidas</h2>
+              <p class="card-desc">Operações seguras e frequentes de preparação e diagnóstico.</p>
+            </div>
+          </div>
+          <div class="grid-3">
+            <button class="action-tile" id="qa-ntp">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+              <div><div class="action-tile-title">Horário de Brasília</div><div class="action-tile-sub">Sincronizar via a.st1.ntp.br</div></div>
+            </button>
+            <button class="action-tile" id="qa-ptbr">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></div>
+              <div><div class="action-tile-title">Idioma Português (BR)</div><div class="action-tile-sub">Ajusta interface, data e 24h</div></div>
+            </button>
+            <button class="action-tile" id="qa-bench">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg></div>
+              <div><div class="action-tile-title">Relatório de Bancada</div><div class="action-tile-sub">PostScript direto na porta 9100</div></div>
+            </button>
+            <button class="action-tile" id="qa-menu">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg></div>
+              <div><div class="action-tile-title">Página de Menu Nativa</div><div class="action-tile-sub">Dispara @PJL LPRINTMENUS</div></div>
+            </button>
+            <button class="action-tile" id="qa-backup">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></div>
+              <div><div class="action-tile-title">Backup 4 Categorias</div><div class="action-tile-sub">Arquivos, eSF, Rede e Configs</div></div>
+            </button>
+            <button class="action-tile" id="qa-vnc">
+              <div class="action-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg></div>
+              <div><div class="action-tile-title">Painel Remoto VNC</div><div class="action-tile-sub">Ativa e abre espelhamento LCD</div></div>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. AGENTE TI -->
+      <section class="view" id="view-agent">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Agente TI</h1>
+            <p class="page-sub">Execução por comandos em português com proteção em 3 níveis (confirmação por PIN para ações críticas).</p>
+          </div>
+          <div class="btn-row">
+            <label class="btn btn-sm" style="cursor:pointer;">
+              <input type="checkbox" id="chk-agent-llm" style="accent-color:var(--accent); margin:0;" />
+              <span id="agent-mode-label">Gemini Cloud</span>
+            </label>
+            <button class="btn btn-sm" id="btn-agent-api">Configurar API</button>
+          </div>
+        </div>
+
+        <div class="agent-layout">
+          <div class="btn-row mb-12">
+            <button class="btn btn-sm agent-chip" data-cmd="status completo">Diagnóstico</button>
+            <button class="btn btn-sm agent-chip" data-cmd="sincronizar hora de brasilia">Hora Brasília</button>
+            <button class="btn btn-sm agent-chip" data-cmd="listar embarcados">Listar embarcados</button>
+            <button class="btn btn-sm agent-chip" data-cmd="ver modo do scanner">Modo scanner</button>
+            <button class="btn btn-sm agent-chip" data-cmd="ver tela inicial">Tela inicial</button>
+            <button class="btn btn-sm agent-chip" data-cmd="imprimir relatorio de bancada">Relatório bancada</button>
+            <button class="btn btn-sm agent-chip" data-cmd="ajuda">Ajuda</button>
+          </div>
+
+          <div class="chat-messages" id="chat-messages">
+            <div class="msg msg-bot">
+              <div class="msg-meta">Sistema • Proteção 3 Níveis Ativa</div>Agente pronto. Digite um comando em português (ex.: "como está a 134?", "sincronizar hora de brasília", "listar embarcados", "mude o idioma para português", "desativar adf").
+Operações críticas (firmware, wipe, NVRAM, fábrica, IP estático) sempre exigem pré-checagem e confirmação por PIN.</div>
+          </div>
+
+          <div class="chat-input-bar">
+            <input id="agent-input" class="input" placeholder="Digite o comando em português e pressione Enter..." />
+            <button class="btn btn-primary" id="btn-agent-send" style="height:38px; padding:0 18px;">Enviar</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. TELA INICIAL E PAPEL -->
+      <section class="view" id="view-home-paper">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Tela Inicial e Papel</h1>
+            <p class="page-sub">Personalização dos botões do visor LCD, papel de parede e parâmetros da Bandeja 1.</p>
+          </div>
+          <button class="btn" id="btn-home-read">Ler da impressora</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Botões da Tela Inicial (LCD)</h2>
+              <p class="card-desc">Visualização ao vivo dos ícones habilitados na página principal.</p>
+            </div>
+            <div class="segmented">
+              <button type="button" data-preset="smartphone">Smartphone (4)</button>
+              <button type="button" data-preset="corporativo">Corporativo (6)</button>
+              <button type="button" data-preset="copia_e_usb">Cópia e USB</button>
+              <button type="button" data-preset="todos">Todos</button>
+            </div>
+          </div>
+
+          <div class="lcd-bezel">
+            <div class="lcd-bar">
+              <span>LEXMARK LCD 800x480 — PREVIEW</span>
+              <span id="lcd-count">0 ícones ativos</span>
+            </div>
+            <div class="lcd-grid" id="lcd-preview"></div>
+          </div>
+
+          <div class="toggle-grid" id="home-toggles"></div>
+
+          <div class="btn-row mt-12">
+            <button class="btn btn-primary" id="btn-home-apply">Aplicar botões no painel</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2 class="card-title">Papel e Impressão Padrão</h2>
+                <p class="card-desc">Bandeja 1 (EWS) e padrões PJL (Duplex e Modo Eco).</p>
+              </div>
+            </div>
+            <div class="field mb-12">
+              <label for="sel-origem">Origem Padrão</label>
+              <select id="sel-origem" class="select"></select>
+            </div>
+            <div class="field mb-12">
+              <label for="sel-tamanho">Tamanho do Papel</label>
+              <select id="sel-tamanho" class="select"></select>
+            </div>
+            <div class="field mb-12">
+              <label for="sel-tipo">Tipo de Mídia</label>
+              <select id="sel-tipo" class="select"></select>
+            </div>
+            <div class="btn-row mb-12">
+              <label class="toggle-item"><input type="checkbox" id="chk-duplex" /> Duplex (Frente e Verso)</label>
+              <label class="toggle-item"><input type="checkbox" id="chk-eco" /> Modo Eco</label>
+            </div>
+            <button class="btn btn-primary" id="btn-paper-apply">Gravar configurações</button>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2 class="card-title">Papel de Parede do Visor</h2>
+                <p class="card-desc">Conversão automática para JPEG Baseline 800×414 (&le; 125 KB).</p>
+              </div>
+            </div>
+            <div class="field mb-12">
+              <label for="file-wallpaper">Imagem (PNG, JPG ou BMP)</label>
+              <input type="file" id="file-wallpaper" class="input" accept=".png,.jpg,.jpeg,.bmp" style="padding-top:5px;" />
+            </div>
+            <button class="btn btn-primary" id="btn-wallpaper-upload">Enviar imagem para o visor</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. SISTEMA E SCANNER -->
+      <section class="view" id="view-system">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Sistema e Scanner</h1>
+            <p class="page-sub">Sincronização oficial NTP.br, modo de operação do scanner MFP, idioma e painel.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Data e Hora — Horário Oficial de Brasília (NTP.br)</h2>
+              <p class="card-desc" id="ntp-status-text">Consulta direta ao servidor oficial do NIC.br (UTC-03:00), sem depender do relógio do PC.</p>
+            </div>
+            <button class="btn btn-sm" id="btn-ntp-read">Ler relógio atual</button>
+          </div>
+          <div class="btn-row" style="align-items:flex-end;">
+            <div class="field" style="min-width:240px;">
+              <label for="inp-ntp-server">Servidor NTP</label>
+              <input id="inp-ntp-server" class="input mono" value="a.st1.ntp.br" />
+            </div>
+            <button class="btn btn-primary" id="btn-ntp-now">Sincronizar agora (NTP.br)</button>
+            <button class="btn" id="btn-ntp-native">Ativar NTP nativo na impressora</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Modo de Operação do Scanner MFP</h2>
+              <p class="card-desc">Validado via mini-UCF (mfp.scanner.scannerDisabled). Requer reinicialização da máquina para aplicar no ScanManager2.</p>
+            </div>
+            <button class="btn btn-sm" id="btn-scanner-read">Ler modo atual</button>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+            <div class="segmented" id="seg-scanner">
+              <button type="button" data-val="0" class="active">Ativado (Normal)</button>
+              <button type="button" data-val="1">Desativado (Só Impressora)</button>
+              <button type="button" data-val="2">ADF Desativado (Só Mesa)</button>
+            </div>
+            <button class="btn btn-primary" id="btn-scanner-apply">Gravar modo na NVRAM</button>
+          </div>
+          <div class="muted mt-12" id="scanner-status-text"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Idioma, Visor LCD e Preferências do Painel</h2>
+              <p class="card-desc">Ajustes rápidos de interface, brilho, áudio do ADF e acesso remoto VNC.</p>
+            </div>
+          </div>
+          <div class="grid-3 mb-12">
+            <div class="field">
+              <label for="sel-lang">Idioma do Equipamento</label>
+              <select id="sel-lang" class="select">
+                <option value="portugues">Português (Brasil)</option>
+                <option value="ingles">English (US)</option>
+                <option value="espanhol">Español</option>
+                <option value="frances">Français</option>
+                <option value="alemao">Deutsch</option>
+                <option value="italiano">Italiano</option>
+                <option value="turco">Türkçe (Turco)</option>
+                <option value="russo">Русский (Russo)</option>
+                <option value="polones">Polski</option>
+                <option value="holandes">Nederlands</option>
+                <option value="japones">日本語</option>
+                <option value="coreano">한국어</option>
+                <option value="chines">简体中文</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="inp-lcd-msg">Mensagem do Visor LCD (vazio = Pronto)</label>
+              <input id="inp-lcd-msg" class="input" placeholder="Ex.: MANUTENCAO TI" maxlength="32" />
+            </div>
+            <div class="field">
+              <label for="inp-brilho">Brilho do LCD (<span id="lbl-brilho">100</span>%)</label>
+              <input id="inp-brilho" type="range" min="20" max="100" step="5" value="100" style="margin-top:8px; accent-color:var(--accent);" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btn-lang-apply">Aplicar idioma</button>
+            <button class="btn" id="btn-lcd-apply">Gravar visor LCD</button>
+            <label class="toggle-item" style="padding:6px 10px;"><input type="checkbox" id="chk-bipe" checked /> Bipe ADF</label>
+            <button class="btn" id="btn-panel-apply">Salvar brilho, bipe e VNC</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. EMBARCADOS (NDD / eSF) -->
+      <section class="view" id="view-esf">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Embarcados (eSF / NDD)</h1>
+            <p class="page-sub">Gestão de aplicativos instalados e assistente de instalação de pacotes NDD Print.</p>
+          </div>
+          <button class="btn" id="btn-esf-refresh">Atualizar lista</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Aplicativos Instalados</h2>
+              <p class="card-desc">Lido diretamente de unifiedSolutions_apps.html.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Aplicativo</th>
+                  <th>ID</th>
+                  <th>Versão</th>
+                  <th>Licença</th>
+                  <th>Status</th>
+                  <th style="text-align:right;">Ações</th>
+                </tr>
+              </thead>
+              <tbody id="esf-tbody">
+                <tr><td colspan="6" class="muted" style="text-align:center; padding:22px;">Clique em "Atualizar lista" para consultar os embarcados da impressora.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Instalar Novo Embarcado (NDD / eSF)</h2>
+              <p class="card-desc">Envia pacote .fls ou licença .lic via unifiedSolutions_install.html com pré-sincronização de horário.</p>
+            </div>
+          </div>
+          <div class="grid-2 mb-12">
+            <div class="field">
+              <label for="file-esf-app">Pacote de Instalação (.fls, .lic, .jar)</label>
+              <input type="file" id="file-esf-app" class="input" accept=".fls,.lic,.jar,.zip" style="padding-top:5px;" />
+            </div>
+            <div class="field">
+              <label for="file-esf-cfg">Configuração pós-instalação (opcional — settingfileesf.ucf)</label>
+              <input type="file" id="file-esf-cfg" class="input" accept=".ucf" style="padding-top:5px;" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <label class="toggle-item" style="padding:6px 10px;"><input type="checkbox" id="chk-esf-ntp" checked /> Sincronizar horário de Brasília (NTP.br) antes de instalar</label>
+            <button class="btn btn-primary" id="btn-esf-install">Instalar embarcado</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. BACKUP E CLONAGEM -->
+      <section class="view" id="view-backup">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Backup e Clonagem</h1>
+            <p class="page-sub">Exportação estruturada nas 4 categorias (Arquivos, Embarcados, Rede e Configurações) e restauração segura.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Exportar Pacote Estruturado</h2>
+              <p class="card-desc">Selecione quais camadas incluir na pasta datada e no arquivo .ZIP.</p>
+            </div>
+          </div>
+
+          <div class="grid-2 mb-12">
+            <label class="bkp-card checked">
+              <input type="checkbox" id="bkp-arq" checked />
+              <div>
+                <div class="action-tile-title">1. Arquivos e Relatórios</div>
+                <div class="action-tile-sub">deviceinfo.html, eventlog.html, scanmgr_debug.txt e resumo SNMP</div>
+              </div>
+            </label>
+            <label class="bkp-card checked">
+              <input type="checkbox" id="bkp-emb" checked />
+              <div>
+                <div class="action-tile-title">2. Embarcados (eSF / NDD)</div>
+                <div class="action-tile-sub">settingfileesf.ucf e inventário JSON dos apps instalados</div>
+              </div>
+            </label>
+            <label class="bkp-card checked">
+              <input type="checkbox" id="bkp-red" checked />
+              <div>
+                <div class="action-tile-title">3. Rede</div>
+                <div class="action-tile-sub">rede_somente.ucf (chaves TCP/IP, SNMP, SMTP) e setup_rede.html</div>
+              </div>
+            </label>
+            <label class="bkp-card checked">
+              <input type="checkbox" id="bkp-cfg" checked />
+              <div>
+                <div class="action-tile-title">4. Configurações Gerais</div>
+                <div class="action-tile-sub">settingfile.ucf, shortcuts.ucf, authfile.ucf e cópia sem IP para clonagem</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="btn-row" style="align-items:flex-end;">
+            <div class="field" style="flex:1; min-width:260px;">
+              <label for="inp-bkp-dir">Pasta de destino</label>
+              <input id="inp-bkp-dir" class="input mono" />
+            </div>
+            <button class="btn" id="btn-bkp-pick">Escolher pasta</button>
+            <label class="toggle-item" style="padding:6px 10px;"><input type="checkbox" id="bkp-zip" checked /> Gerar .ZIP</label>
+            <button class="btn btn-primary" id="btn-bkp-export">Exportar backup</button>
+          </div>
+          <div class="code-output" id="bkp-output" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Importar / Clonar Configuração (.ucf)</h2>
+              <p class="card-desc">Aplica configurações ou embarcados na impressora conectada.</p>
+            </div>
+          </div>
+          <div class="btn-row" style="align-items:flex-end;">
+            <div class="field" style="flex:1; min-width:260px;">
+              <label for="file-ucf-import">Arquivo .ucf (settingfile, settingfileesf ou shortcuts)</label>
+              <input type="file" id="file-ucf-import" class="input" accept=".ucf" style="padding-top:5px;" />
+            </div>
+            <label class="toggle-item" style="padding:6px 10px;"><input type="checkbox" id="chk-keep-ip" checked /> Preservar IP/Rede (clonagem segura)</label>
+            <button class="btn btn-primary" id="btn-bkp-import">Importar UCF</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. ENGENHARIA -->
+      <section class="view" id="view-engineering">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Engenharia</h1>
+            <p class="page-sub">Ferramentas de baixo nível (PJL 9100, SNMPv2c, SE Menu) e zona crítica protegida por PIN.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Diagnóstico Direto (PJL 9100, SNMP e SE Menu)</h2>
+              <p class="card-desc">Execução imediata em protocolos nativos.</p>
+            </div>
+            <button class="btn btn-sm" id="btn-eng-ports">Scan de portas</button>
+          </div>
+
+          <div class="grid-2 mb-12">
+            <div class="btn-row" style="align-items:flex-end;">
+              <div class="field" style="flex:1;">
+                <label for="inp-pjl">Comando PJL (porta 9100)</label>
+                <input id="inp-pjl" class="input mono" list="pjl-presets" value="INFO STATUS" />
+                <datalist id="pjl-presets">
+                  <option value="INFO STATUS"></option>
+                  <option value="INFO ID"></option>
+                  <option value="INFO PAGECOUNT"></option>
+                  <option value="INFO CONFIG"></option>
+                  <option value="INFO VARIABLES"></option>
+                  <option value="LPRINTMENUS"></option>
+                  <option value="CLEAR WARNING"></option>
+                </datalist>
+              </div>
+              <button class="btn btn-primary" id="btn-eng-pjl">Enviar PJL</button>
+            </div>
+
+            <div class="btn-row" style="align-items:flex-end;">
+              <div class="field" style="flex:1;">
+                <label for="inp-snmp">OID SNMPv2c (porta 161)</label>
+                <input id="inp-snmp" class="input mono" list="oid-presets" value="1.3.6.1.2.1.1.1.0" />
+                <datalist id="oid-presets">
+                  <option value="1.3.6.1.2.1.1.1.0"></option>
+                  <option value="1.3.6.1.2.1.43.5.1.1.17.1"></option>
+                  <option value="1.3.6.1.2.1.43.10.2.1.4.1.1"></option>
+                  <option value="1.3.6.1.2.1.43.16.5.1.2.1.1"></option>
+                  <option value="1.3.6.1.4.1.641.2.1.2.1.2.1"></option>
+                </datalist>
+              </div>
+              <button class="btn" id="btn-eng-snmp">SNMP GET</button>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-sm eng-se" data-ep="/cgi-bin/dynamic/se_index.html">SE Menu</button>
+            <button class="btn btn-sm eng-se" data-ep="/cgi-bin/script/printer/scanmgr">ScanManager2</button>
+            <button class="btn btn-sm eng-se" data-ep="/cgi-bin/npapalertpg">Alertas NPAP</button>
+            <button class="btn btn-sm eng-se" data-ep="/cgi-bin/dynamic/printer/config/reports/eventlog.html">Event Log</button>
+          </div>
+
+          <div class="code-output" id="eng-output">Saída de diagnóstico aparecerá aqui.</div>
+        </div>
+
+        <div class="card card-danger">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" style="color:var(--danger);">Zona Crítica (Pré-checagem + Confirmação com PIN)</h2>
+              <p class="card-desc">Todas as operações abaixo abrem o modal de validação SNMP, alertas de consequências e PIN de 4 dígitos.</p>
+            </div>
+          </div>
+
+          <div class="btn-row mb-12" style="align-items:flex-end;">
+            <div class="field" style="flex:1; max-width:440px;">
+              <label for="file-fw">Atualização de Firmware (.fls / .bin)</label>
+              <input type="file" id="file-fw" class="input" accept=".fls,.bin" style="padding-top:5px;" />
+            </div>
+            <button class="btn btn-danger-outline" id="btn-crit-fw">Preparar envio de firmware</button>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-danger-outline crit-btn" data-cmd="restaurar padroes de fabrica">Padrões de Fábrica (Base)</button>
+            <button class="btn btn-danger-outline crit-btn" data-cmd="restaurar padroes de fabrica rede">Reset de Rede</button>
+            <button class="btn btn-danger-outline crit-btn" data-cmd="apagar nvram">Apagar NVRAM</button>
+            <button class="btn btn-danger-outline crit-btn" data-cmd="wipe fora de servico">Wipe Fora de Serviço</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ==================== CONSOLE RODAPÉ RECOLHÍVEL ==================== -->
+    <footer class="footer-console">
+      <div class="console-bar">
+        <button class="console-toggle" id="btn-console-toggle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
+          <span id="console-toggle-label">Console Técnico (0)</span>
+        </button>
+        <div class="muted" id="footer-status">Pronto</div>
+      </div>
+      <div class="console-body" id="console-body">
+        <div class="btn-row" style="justify-content:flex-end; margin-bottom:6px;">
+          <button class="btn btn-sm" id="btn-log-clear">Limpar</button>
+          <button class="btn btn-sm" id="btn-log-download">Exportar .txt</button>
+        </div>
+        <div class="console-log" id="console-log"></div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ==================== MODAL: LOGIN EWS / HTTPS ==================== -->
+  <div class="modal-backdrop" id="modal-auth">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Autenticação EWS e HTTPS</h3>
+        <button class="btn btn-sm" data-close="modal-auth">Fechar</button>
+      </div>
+      <p class="muted mb-12">As credenciais ficam armazenadas apenas na memória RAM desta sessão.</p>
+      <div class="field mb-12"><label>Usuário (opcional se usar apenas senha ou PIN)</label><input id="auth-user" class="input" placeholder="admin" /></div>
+      <div class="field mb-12"><label>Senha de Administrador</label><input id="auth-pass" type="password" class="input" /></div>
+      <div class="field mb-12"><label>PIN (opcional)</label><input id="auth-pin" type="password" class="input" /></div>
+      <label class="toggle-item"><input type="checkbox" id="auth-https" /> Forçar HTTPS (porta 443 — aceita certificado autoassinado)</label>
+      <div class="muted mt-12" id="auth-feedback"></div>
+      <div class="modal-footer">
+        <button class="btn" id="btn-auth-test">Testar acesso</button>
+        <button class="btn btn-danger-outline" id="btn-auth-clear">Limpar</button>
+        <button class="btn btn-primary" id="btn-auth-save">Salvar na sessão</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: DESCOBRIR REDE ==================== -->
+  <div class="modal-backdrop" id="modal-discover">
+    <div class="modal" style="max-width:640px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Impressoras Lexmark na Rede</h3>
+        <button class="btn btn-sm" data-close="modal-discover">Fechar</button>
+      </div>
+      <div class="muted mb-12" id="discover-status">Varrendo sub-rede local (porta 9100 + SNMP)...</div>
+      <div class="table-wrap" style="max-height:290px; overflow-y:auto;">
+        <table>
+          <thead><tr><th>IP</th><th>Modelo</th><th>Serial</th><th>Páginas</th><th></th></tr></thead>
+          <tbody id="discover-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: API GEMINI ==================== -->
+  <div class="modal-backdrop" id="modal-api">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Configurar API Google Gemini</h3>
+        <button class="btn btn-sm" data-close="modal-api">Fechar</button>
+      </div>
+      <p class="muted mb-12">Processamento na nuvem (0% CPU local). Chave salva em config_agente.json (ignorado no Git) e enviada somente por cabeçalho seguro.</p>
+      <div class="btn-row mb-12">
+        <a class="btn btn-sm" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="text-decoration:none;">Abrir Google AI Studio</a>
+      </div>
+      <div class="field mb-12"><label>API Key (deixe em branco para manter a chave atual)</label><input id="api-key-input" type="password" class="input mono" placeholder="Cole sua chave do Google AI Studio" /></div>
+      <div class="field mb-12">
+        <label>Modelo</label>
+        <select id="api-model-select" class="select">
+          <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recomendado)</option>
+          <option value="gemini-flash-latest">gemini-flash-latest</option>
+          <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+          <option value="gemini-pro-latest">gemini-pro-latest</option>
+        </select>
+      </div>
+      <div class="muted" id="api-feedback"></div>
+      <div class="modal-footer">
+        <button class="btn" id="btn-api-test">Testar conexão</button>
+        <button class="btn btn-primary" id="btn-api-save">Salvar e ativar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: CONFIRMAÇÃO CRÍTICA COM PIN ==================== -->
+  <div class="modal-backdrop" id="modal-pin">
+    <div class="modal" style="max-width:560px; border-color:var(--danger-border);">
+      <div class="modal-header">
+        <h3 class="modal-title" style="color:var(--danger);" id="pin-title">Confirmação de Operação Crítica</h3>
+      </div>
+      <div class="code-output" id="pin-target" style="margin-top:0; margin-bottom:12px;"></div>
+      <div style="font-size:12px; font-weight:600; color:var(--warning); margin-bottom:6px;">CONSEQUÊNCIAS E ALERTAS</div>
+      <ul id="pin-risks" style="margin:0 0 14px 18px; padding:0; font-size:12.5px; color:var(--text-secondary);"></ul>
+      <div class="field">
+        <label id="pin-prompt-label">Digite o PIN para autorizar:</label>
+        <input id="pin-input" class="input mono" style="width:140px; font-size:16px; font-weight:700; text-align:center;" maxlength="4" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="btn-pin-cancel">Cancelar (Seguro)</button>
+        <button class="btn btn-danger-solid" id="btn-pin-confirm" disabled>Confirmar e executar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

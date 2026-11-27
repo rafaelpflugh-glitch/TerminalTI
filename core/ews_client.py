@@ -11,6 +11,7 @@ sem depender apenas da porta 9100.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from html.parser import HTMLParser
 import io
 from pathlib import Path
@@ -19,6 +20,49 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
+from requests.auth import HTTPBasicAuth
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+@dataclass
+class EWSCredenciais:
+    """Credenciais de sessão mantidas EXCLUSIVAMENTE em RAM (nunca salvas em disco)."""
+    usuario: str = ""
+    senha: str = ""
+    pin: str = ""
+    usar_https: bool = False
+
+
+# Cofre volátil em memória por IP (compartilhado entre abas, backup, eSF e Agente)
+_CREDENCIAIS_SESSAO: Dict[str, EWSCredenciais] = {}
+
+
+def definir_credenciais_ews(
+    ip: str,
+    usuario: str = "",
+    senha: str = "",
+    pin: str = "",
+    usar_https: bool = False,
+) -> EWSCredenciais:
+    ip_limpo = str(ip or "").strip()
+    cred = EWSCredenciais(
+        usuario=str(usuario or "").strip(),
+        senha=str(senha or ""),
+        pin=str(pin or "").strip(),
+        usar_https=bool(usar_https),
+    )
+    _CREDENCIAIS_SESSAO[ip_limpo] = cred
+    return cred
+
+
+def obter_credenciais_ews(ip: str) -> Optional[EWSCredenciais]:
+    return _CREDENCIAIS_SESSAO.get(str(ip or "").strip())
+
+
+def limpar_credenciais_ews(ip: str) -> None:
+    _CREDENCIAIS_SESSAO.pop(str(ip or "").strip(), None)
 
 
 class _EWSHTMLFormParser(HTMLParser):
@@ -134,21 +178,43 @@ class EWSClientError(Exception):
 
 class LexmarkEWSClient:
     """
-    Cliente HTTP/CGI para leitura e gravação direta nas páginas de
-    configuração EWS das impressoras Lexmark (famílias MS/MX/CS/CX).
+    Cliente HTTP/HTTPS/CGI para leitura e gravação direta nas páginas de
+    configuração EWS das impressoras Lexmark (famílias MS/MX/CS/CX),
+    com suporte a autenticação (Usuário+Senha, Senha ou PIN) e HTTPS.
     """
 
-    def __init__(self, ip: str, timeout: int = 12):
+    def __init__(
+        self,
+        ip: str,
+        timeout: int = 12,
+        usuario: Optional[str] = None,
+        senha: Optional[str] = None,
+        pin: Optional[str] = None,
+        usar_https: Optional[bool] = None,
+    ):
         self.ip = str(ip).strip()
-        self.base_url = f"http://{self.ip}"
         self.timeout = timeout
+        cred_salva = obter_credenciais_ews(self.ip)
+
+        self.usuario = usuario if usuario is not None else (cred_salva.usuario if cred_salva else "")
+        self.senha = senha if senha is not None else (cred_salva.senha if cred_salva else "")
+        self.pin = pin if pin is not None else (cred_salva.pin if cred_salva else "")
+        self.usar_https = usar_https if usar_https is not None else (cred_salva.usar_https if cred_salva else False)
+
+        esquema = "https" if self.usar_https else "http"
+        self.base_url = f"{esquema}://{self.ip}"
+
         self.session = requests.Session()
+        self.session.verify = False
         self.session.headers.update(
             {
                 "User-Agent": "TerminalTI-Engineering/2.0",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
         )
+        if self.usuario or self.senha:
+            self.session.auth = HTTPBasicAuth(self.usuario or "admin", self.senha)
+        self._autenticado_form = False
 
     def _url(self, path: str) -> str:
         if path.startswith(("http://", "https://")):
@@ -165,19 +231,107 @@ class LexmarkEWSClient:
         except UnicodeDecodeError:
             return raw.decode("iso-8859-1", errors="replace")
 
+    @staticmethod
+    def _eh_tela_login(html: str, resp: requests.Response) -> bool:
+        if resp.status_code in (401, 403):
+            return True
+        low = html.lower()
+        return (
+            'id="login_form"' in low
+            or "name=\"login_form\"" in low
+            or "/printer/login.html" in resp.url.lower()
+            or ('type="password"' in low and ("username" in low or "pin" in low))
+        )
+
+    def _submeter_login_html(self, html_login: str, url_origem: str) -> bool:
+        """Tenta autenticar automaticamente em um formulário de login EWS Lexmark."""
+        if not (self.usuario or self.senha or self.pin):
+            return False
+
+        parser = _EWSHTMLFormParser()
+        parser.feed(html_login)
+        if not parser.form_found:
+            return False
+
+        action_url = urljoin(url_origem, (parser.action or url_origem).strip())
+        dados: Dict[str, str] = {k: v for k, v in parser.pares}
+
+        for k in list(dados.keys()):
+            kl = k.lower()
+            if "user" in kl or "login" in kl:
+                dados[k] = self.usuario or "admin"
+            elif "pin" in kl:
+                dados[k] = self.pin or self.senha
+            elif "pass" in kl or "pwd" in kl:
+                dados[k] = self.senha or self.pin
+
+        if "username" not in dados and self.usuario:
+            dados["username"] = self.usuario
+        if "password" not in dados and (self.senha or self.pin):
+            dados["password"] = self.senha or self.pin
+
+        try:
+            r_post = self.session.post(action_url, data=dados, timeout=self.timeout, allow_redirects=True)
+            html_pos = self._decodificar(r_post)
+            ok = not self._eh_tela_login(html_pos, r_post) and r_post.status_code < 400
+            self._autenticado_form = ok
+            return ok
+        except Exception:
+            return False
+
+    def _get_com_auth(self, path: str) -> requests.Response:
+        url = self._url(path)
+        try:
+            resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+        except requests.exceptions.ConnectionError:
+            # Fallback automático para HTTPS se HTTP recusar ou redirecionar
+            if not self.usar_https:
+                self.usar_https = True
+                self.base_url = f"https://{self.ip}"
+                url = self._url(path)
+                resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+            else:
+                raise
+
+        html = self._decodificar(resp)
+        if self._eh_tela_login(html, resp):
+            if self._submeter_login_html(html, resp.url):
+                resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+                html = self._decodificar(resp)
+            if self._eh_tela_login(html, resp):
+                raise EWSClientError(
+                    f"🔒 Impressora {self.ip} protegida por senha/PIN! "
+                    "Clique em '🔒 Login EWS' no topo e informe as credenciais de administrador."
+                )
+
+        resp.raise_for_status()
+        return resp
+
+    def testar_conexao_ews(self) -> Dict[str, str]:
+        """Testa conectividade HTTP/HTTPS e valida se o acesso administrativo está liberado."""
+        resp = self._get_com_auth("/cgi-bin/dynamic/printer/config/gen/general.html")
+        proto = "HTTPS" if resp.url.startswith("https://") else "HTTP"
+        return {
+            "ok": "1",
+            "protocolo": proto,
+            "status_code": str(resp.status_code),
+            "autenticado": "Sim (Credenciais ativas)" if (self.usuario or self.senha or self.pin) else "Acesso aberto (sem senha)",
+        }
+
     def ler_formulario(self, dynamic_path: str) -> Tuple[str, str, List[Tuple[str, str]], Dict[str, str]]:
         """
-        Faz GET na página dinâmica do EWS, extrai o <form>, seu action,
-        a lista ordenada de pares (name, value) atuais e um dicionário
-        {name: current_value} para sincronizar a interface.
+        Faz GET na página dinâmica do EWS (com suporte a HTTPS e Login automático),
+        extrai o <form>, seu action, a lista ordenada de pares (name, value) atuais
+        e um dicionário {name: current_value} para sincronizar a interface.
         """
-        url = self._url(dynamic_path)
         try:
-            resp = self.session.get(url, timeout=self.timeout)
-            resp.raise_for_status()
+            resp = self._get_com_auth(dynamic_path)
+        except EWSClientError:
+            raise
         except Exception as erro:
-            raise EWSClientError(f"Falha ao acessar {url}: {erro}") from erro
+            raise EWSClientError(f"Falha ao acessar {self._url(dynamic_path)}: {erro}") from erro
 
+        url = resp.url
         html = self._decodificar(resp)
         parser = _EWSHTMLFormParser()
         parser.feed(html)
@@ -448,16 +602,16 @@ class LexmarkEWSClient:
 
     def ler_pagina_texto(self, caminho: str) -> str:
         """
-        Realiza um HTTP GET somente-leitura em um endpoint EWS/SE (ex.: /cgi-bin/script/printer/scanmgr)
-        e retorna o conteúdo textual bruto.
+        Realiza um HTTP/HTTPS GET somente-leitura (com suporte a autenticação)
+        em um endpoint EWS/SE e retorna o conteúdo textual decodificado.
         """
-        url = self._url(caminho)
         try:
-            resp = self.session.get(url, timeout=self.timeout)
-            resp.raise_for_status()
-            return resp.text
+            resp = self._get_com_auth(caminho)
+            return self._decodificar(resp)
+        except EWSClientError:
+            raise
         except Exception as erro:
-            raise EWSClientError(f"Falha ao ler {url}: {erro}") from erro
+            raise EWSClientError(f"Falha ao ler {self._url(caminho)}: {erro}") from erro
 
     def importar_configuracao_ucf(self, caminho_ucf: str, endpoint: str = "importsettings.html") -> Dict[str, str]:
         """

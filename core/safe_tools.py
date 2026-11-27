@@ -27,8 +27,11 @@ import socket
 import time
 from typing import Any, Dict, List, Optional
 
+from core.backup_exporter import exportar_backup_estruturado
 from core.catalog import ICONES_HOME_CAMPOS, MODO_SCANNER_OPCOES
+from core.esf_manager import listar_apps_embarcados
 from core.ews_client import EWSClientError, LexmarkEWSClient
+from core.ntp_brasil import sincronizar_hora_brasilia
 from core.pjl_snmp_client import (
     UEL,
     enviar_pjl,
@@ -902,22 +905,35 @@ def alterar_idioma(ip: str, idioma: str = "portugues") -> Dict[str, Any]:
     }
 
 
-def sincronizar_relogio(ip: str) -> Dict[str, Any]:
-    """Sincroniza data/hora da impressora com o relógio do PC (UTC-03:00 Brasília)."""
+def sincronizar_relogio(ip: str, ativar_ntp_nativo: bool = False, servidor_ntp: str = "a.st1.ntp.br") -> Dict[str, Any]:
+    """
+    Sincroniza data/hora da impressora com o Horário Oficial de Brasília (NTP.br — a.st1.ntp.br),
+    oupcionalmente ativando também o cliente NTP nativo da impressora.
+    """
     ip = _validar_ip(ip)
-    agora_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ews = LexmarkEWSClient(ip, timeout=10.0)
-    ews.gravar_campos_formulario(
-        "/cgi-bin/dynamic/printer/config/secure/datetime.html",
-        {"1.system.4982": agora_str, "0.system.12360": "18"},
-        "/cgi-bin/posttest/printer/config/secure/datetime.html",
+    return sincronizar_hora_brasilia(ip, ativar_ntp_nativo=ativar_ntp_nativo, servidor_ntp=servidor_ntp)
+
+
+def listar_embarcados_seguro(ip: str) -> Dict[str, Any]:
+    """Lista os aplicativos embarcados (eSF / NDD) instalados na impressora."""
+    ip = _validar_ip(ip)
+    return listar_apps_embarcados(ip)
+
+
+def exportar_backup_rapido(ip: str, community: str = "public") -> Dict[str, Any]:
+    """Exporta backup completo em 4 categorias + .zip para C:\\TerminalTI\\Backups."""
+    ip = _validar_ip(ip)
+    pasta = Path(__file__).resolve().parent.parent / "Backups"
+    return exportar_backup_estruturado(
+        ip=ip,
+        pasta_destino=str(pasta),
+        incluir_configuracoes=True,
+        incluir_embarcados=True,
+        incluir_rede=True,
+        incluir_arquivos=True,
+        gerar_zip=True,
+        community=community,
     )
-    return {
-        "ok": True,
-        "ip": ip,
-        "data_hora": agora_str,
-        "resumo": f"✅ Relógio da impressora {ip} sincronizado com o PC: {agora_str} (UTC-03:00 Brasília).",
-    }
 
 
 def configurar_painel_geral(
@@ -983,6 +999,8 @@ SAFE_TOOL_REGISTRY = {
     "alterar_idioma": alterar_idioma,
     "sincronizar_relogio": sincronizar_relogio,
     "configurar_painel_geral": configurar_painel_geral,
+    "listar_embarcados_seguro": listar_embarcados_seguro,
+    "exportar_backup_rapido": exportar_backup_rapido,
 }
 
 

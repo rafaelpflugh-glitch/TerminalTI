@@ -50,5 +50,7 @@ Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
 
-# Configuracao local do Agente (chaves API)
+# Configuracao local do Agente (chaves API) e backups locais
 config_agente.json
+historico_ips.json
+Backups/

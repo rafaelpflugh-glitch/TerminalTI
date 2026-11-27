@@ -250,8 +250,9 @@ def _texto_ajuda() -> str:
         "• Diagnóstico completo : 'status', 'como está a 134?', 'quanto tem de toner?', 'contador de páginas'\n"
         "• Modo do Scanner (MFP): 'ver modo do scanner', 'desativar scanner', 'desativar adf', 'ativar scanner'\n"
         "• Visor LCD            : 'coloca \"MANUTENCAO TI\" no visor', 'limpar visor'\n"
-        "• Idioma / Relógio/VNC : 'mude o idioma para português do brasil', 'idioma inglês',\n"
-        "                         'sincronizar relógio', 'brilho 80%', 'desligar bipe do adf', 'ativar vnc'\n"
+        "• Idioma / NTP / VNC   : 'mude o idioma para português', 'sincronizar hora de brasília',\n"
+        "                         'ativar ntp oficial', 'brilho 80%', 'desligar bipe do adf', 'ativar vnc'\n"
+        "• Embarcados & Backup  : 'listar embarcados' (eSF/NDD), 'fazer backup completo'\n"
         "• Tela Inicial (Botões): 'ver tela inicial', 'modo corporativo', 'modo smartphone',\n"
         "                         'ocultar fax', 'mostrar email', 'deixar só cópia e usb'\n"
         "• Relatório Zero-Driver: 'imprimir relatório de bancada', 'imprimir página de teste'\n"
@@ -619,9 +620,19 @@ class TerminalTIAgent:
                     if tem_gatilho_idioma or len(alvo_lang) >= 5:
                         return ("alterar_idioma", {"ip": ip, "idioma": alvo_lang})
 
-        # Relógio / Data e Hora
-        if any(k in norm for k in ("sincronizar relogio", "acertar relogio", "ajustar relogio", "acertar hora", "ajustar hora", "sincronizar hora", "data e hora", "hora do pc")):
-            return ("sincronizar_relogio", {"ip": ip})
+        # Relógio / Data e Hora (NTP Oficial de Brasília — a.st1.ntp.br)
+        if any(k in norm for k in ("ativar ntp", "configurar ntp", "ntp nativo", "ntp oficial", "ntp brasil")):
+            return ("sincronizar_relogio", {"ip": ip, "ativar_ntp_nativo": True})
+        if any(k in norm for k in ("sincronizar relogio", "acertar relogio", "ajustar relogio", "acertar hora", "ajustar hora", "sincronizar hora", "hora de brasilia", "data e hora", "hora do pc")):
+            return ("sincronizar_relogio", {"ip": ip, "ativar_ntp_nativo": False})
+
+        # Embarcados (eSF / NDD)
+        if any(k in norm for k in ("embarcado", "embarcados", "listar apps", "ver apps", "quais apps", "apps instalados", "esf", "ndd")):
+            return ("listar_embarcados_seguro", {"ip": ip})
+
+        # Backup completo 4 categorias
+        if any(k in norm for k in ("fazer backup", "exportar backup", "backup completo", "exportar configurac")):
+            return ("exportar_backup_rapido", {"ip": ip, "community": community})
 
         # Painel Geral: Brilho LCD, Bipe ADF, VNC
         kwargs_painel: Dict[str, Any] = {}
@@ -867,9 +878,11 @@ FERRAMENTAS SEGURAS PERMITIDAS (execução direta):
 11. ler_variaveis_pjl(ip, filtro)
 12. escanear_rede_lexmark(ip_referencia, community)
 13. alterar_idioma(ip, idioma) -> idioma: "portugues", "ingles", "espanhol", "frances", "alemao", "italiano", "turco", "russo", "japones", "coreano", "chines", "polones", "holandes", "sueco", "dinamarques", "noruegues", "finlandes", "tcheco", "hungaro", "grego"
-14. sincronizar_relogio(ip)
+14. sincronizar_relogio(ip, ativar_ntp_nativo) -> usa Horário Oficial de Brasília (a.st1.ntp.br)
 15. configurar_painel_geral(ip, brilho, bipe_adf, ativar_vnc)
 16. imprimir_relatorio_nativo(ip, tipo) -> tipo: "menus" (@PJL LPRINTMENUS), "diretorio", "fontes_pcl", "fontes_ps"
+17. listar_embarcados_seguro(ip) -> lista aplicativos embarcados eSF / NDD instalados
+18. exportar_backup_rapido(ip, community) -> exporta backup 4 categorias + .zip
 """
 
         prompt_sistema = (
